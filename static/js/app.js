@@ -740,7 +740,8 @@ async function checkUpstoxStatus() {
             badge.style.color = '#f87171';
         }
     } catch (e) {
-        badge.textContent = '⚠️ Error';
+        const b = document.getElementById('upstox-status-badge');
+        if (b) b.textContent = '⚠️ Unreachable';
     }
 }
 
@@ -749,7 +750,6 @@ async function connectUpstox() {
         const res = await fetch('/api/upstox/auth-url');
         const data = await res.json();
         if (data.auth_url) {
-            // Open Upstox login in same tab so redirect lands here automatically
             window.location.href = data.auth_url;
         } else {
             showToast('Could not get Upstox auth URL', 'error');
@@ -759,5 +759,17 @@ async function connectUpstox() {
     }
 }
 
-// Check Upstox status on page load
-checkUpstoxStatus();
+// Wire up events after DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    const connectBtn = document.getElementById('upstox-connect-btn');
+    if (connectBtn) connectBtn.addEventListener('click', connectUpstox);
+
+    // Re-check status whenever settings panel is opened
+    const settingsPanel = document.querySelector('details.settings-panel');
+    if (settingsPanel) {
+        settingsPanel.addEventListener('toggle', () => {
+            if (settingsPanel.open) checkUpstoxStatus();
+        });
+    }
+    checkUpstoxStatus();
+});
