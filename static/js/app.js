@@ -722,3 +722,42 @@ async function openChart(ticker) {
     }
 }
 
+// ─── Upstox Auth Helpers ───────────────────────────────────────────────────
+
+async function checkUpstoxStatus() {
+    const badge = document.getElementById('upstox-status-badge');
+    if (!badge) return;
+    try {
+        const res = await fetch('/api/upstox/status');
+        const data = await res.json();
+        if (data.authenticated) {
+            badge.textContent = '✅ Connected';
+            badge.style.background = '#14532d';
+            badge.style.color = '#4ade80';
+        } else {
+            badge.textContent = '🔴 Not Connected';
+            badge.style.background = '#450a0a';
+            badge.style.color = '#f87171';
+        }
+    } catch (e) {
+        badge.textContent = '⚠️ Error';
+    }
+}
+
+async function connectUpstox() {
+    try {
+        const res = await fetch('/api/upstox/auth-url');
+        const data = await res.json();
+        if (data.auth_url) {
+            // Open Upstox login in same tab so redirect lands here automatically
+            window.location.href = data.auth_url;
+        } else {
+            showToast('Could not get Upstox auth URL', 'error');
+        }
+    } catch (e) {
+        showToast('Error connecting to Upstox', 'error');
+    }
+}
+
+// Check Upstox status on page load
+checkUpstoxStatus();

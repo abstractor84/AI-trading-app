@@ -83,10 +83,27 @@
                             <option value="upstox">Upstox (Broker API)</option>
                         </select>
                     </div>
-                    <button id="save-settings-btn" class="btn primary" style="width: 100%;">Update
-                        Settings</button>
+                    <!-- Upstox connection status & auth button -->
+                    <div id="upstox-auth-panel"
+                        style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.2);border-radius:8px;padding:10px;margin-top:4px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                            <span style="font-size:12px;color:var(--text-muted);">Upstox Status</span>
+                            <span id="upstox-status-badge"
+                                style="font-size:11px;padding:2px 8px;border-radius:20px;background:#374151;color:#9ca3af;">Checking...</span>
+                        </div>
+                        <button id="upstox-connect-btn" class="btn" style="width:100%;font-size:12px;padding:6px;"
+                            onclick="connectUpstox()">
+                            🔗 Connect / Re-authorise Upstox
+                        </button>
+                        <p style="font-size:10px;color:var(--text-muted);margin-top:6px;line-height:1.4;">
+                            Clicking will open the Upstox login page. After login, you will be redirected back here and
+                            the token is saved automatically.
+                        </p>
+                    </div>
+                    <button id="save-settings-btn" class="btn primary" style="width: 100%;">Update Settings</button>
                 </div>
             </details>
+
 
             <section class="panel strategy-panel">
                 <h2>🤖 Intraday Strategies</h2>

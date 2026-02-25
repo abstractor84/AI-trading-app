@@ -1,20 +1,25 @@
 import asyncio
 import json
 import logging
+import requests as http_requests
 from datetime import datetime, time as dtime
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from dotenv import load_dotenv, set_key
 import uvicorn
 import os
 from contextlib import asynccontextmanager
-from dotenv import load_dotenv
 import pandas as pd
 from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Watchlist, WatchlistStock
+
+# Upstox OAuth constants
+_UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI", "http://localhost:8000")
+_DOT_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 
 load_dotenv()
 
@@ -32,6 +37,14 @@ discovery_svc = StockDiscoveryService()
 ta_svc = TechnicalAnalysisService()
 news_svc = NewsSentimentService()
 ai_svc = AIScorerService()
+
+def _reload_upstox():
+    """Reload the Upstox token from .env into the TA service."""
+    load_dotenv(override=True)
+    from services import technical_analysis as _ta_mod
+    _ta_mod._upstox_svc.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
+    _ta_mod._upstox_svc.is_authenticated = bool(_ta_mod._upstox_svc.access_token)
+    logger.info(f"Upstox reloaded. Authenticated: {_ta_mod._upstox_svc.is_authenticated}")
 
 # Ensure static dir exists
 os.makedirs("static", exist_ok=True)
@@ -217,8 +230,83 @@ app = FastAPI(title="Intraday AI Trader", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
-async def root():
+async def root(code: str = Query(default=None)):
+    """
+    Root page handler.
+    If Upstox redirects here with ?code=..., we intercept it, exchange for
+    a token, save it to .env, and return a success page.
+    Otherwise we serve the main dashboard.
+    """
+    if code:
+        # Upstox OAuth callback — exchange code for token
+        client_id     = os.getenv("UPSTOX_API_KEY", "")
+        client_secret = os.getenv("UPSTOX_API_SECRET", "")
+        redirect_uri  = _UPSTOX_REDIRECT_URI
+        token_url = "https://api.upstox.com/v2/login/authorization/token"
+        try:
+            resp = http_requests.post(
+                token_url,
+                data={
+                    "code":          code,
+                    "client_id":     client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri":  redirect_uri,
+                    "grant_type":    "authorization_code",
+                },
+                headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                access_token = resp.json().get("access_token", "")
+                set_key(_DOT_ENV_PATH, "UPSTOX_ACCESS_TOKEN", access_token)
+                _reload_upstox()
+                logger.info("Upstox token exchanged and saved successfully.")
+                html = """
+                <html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding-top:100px">
+                <h1 style="color:#22c55e">✅ Upstox Connected!</h1>
+                <p>Your access token has been saved. Upstox data is now active.</p>
+                <a href="/" style="color:#818cf8">Go to Dashboard →</a>
+                </body></html>
+                """
+                return HTMLResponse(content=html)
+            else:
+                logger.error(f"Upstox token exchange failed: {resp.status_code} {resp.text}")
+                html = f"""
+                <html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding-top:100px">
+                <h1 style="color:#ef4444">❌ Token Exchange Failed</h1>
+                <p>Status: {resp.status_code}</p>
+                <pre style="color:#fbbf24">{resp.text}</pre>
+                <a href="/" style="color:#818cf8">Return to Dashboard →</a>
+                </body></html>
+                """
+                return HTMLResponse(content=html, status_code=400)
+        except Exception as e:
+            logger.error(f"Upstox callback exception: {e}")
+            return HTMLResponse(content=f"<h1>Error: {e}</h1>", status_code=500)
+
     return FileResponse("static/index.html")
+
+@app.get("/api/upstox/auth-url")
+async def upstox_auth_url():
+    """Return the Upstox authorization URL for the user to open in their browser."""
+    client_id    = os.getenv("UPSTOX_API_KEY", "")
+    redirect_uri = _UPSTOX_REDIRECT_URI
+    url = (
+        f"https://api.upstox.com/v2/login/authorization/dialog"
+        f"?response_type=code"
+        f"&client_id={client_id}"
+        f"&redirect_uri={redirect_uri}"
+    )
+    return {"auth_url": url}
+
+@app.get("/api/upstox/status")
+async def upstox_status():
+    """Return whether Upstox is currently authenticated."""
+    from services import technical_analysis as _ta_mod
+    return {
+        "authenticated": _ta_mod._upstox_svc.is_authenticated,
+        "token_set": bool(os.getenv("UPSTOX_ACCESS_TOKEN"))
+    }
 
 @app.get("/watchlists")
 async def watchlists_page():
