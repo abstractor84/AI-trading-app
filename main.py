@@ -110,7 +110,7 @@ async def perform_ai_screening(strategy="s1", custom_rules=None):
     # 3. Analyze all
     signals = []
     for ticker in top_candidates:
-        ta_data = ta_svc.analyze_stock(ticker)
+        ta_data = ta_svc.analyze_stock(ticker, data_provider=state.data_provider)
         if not ta_data:
             continue
             

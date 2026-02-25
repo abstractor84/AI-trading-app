@@ -2,17 +2,31 @@ import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
-
 import logging
+
+from services.upstox_service import UpstoxService
+
 logger = logging.getLogger(__name__)
+
+# Singleton Upstox instance shared across calls
+_upstox_svc = UpstoxService()
 
 class TechnicalAnalysisService:
     def __init__(self):
         pass
 
-    def fetch_ohlcv(self, ticker: str, period="5d", interval="5m"):
-        """Fetch 5-minute OHLCV data for technical analysis."""
-        df = yf.download(ticker, period=period, interval=interval, auto_adjust=True)
+    def fetch_ohlcv(self, ticker: str, period="5d", interval="5m", data_provider="yfinance"):
+        """Fetch 5-minute OHLCV data. Uses Upstox when available, falls back to yfinance."""
+        if data_provider == "upstox" and _upstox_svc.is_authenticated:
+            days = int(period.replace("d", "")) if period.endswith("d") else 5
+            df_upstox = _upstox_svc.fetch_ohlcv(ticker, days=days, interval=interval.replace("m", "minute"))
+            if df_upstox is not None and not df_upstox.empty and len(df_upstox) >= 10:
+                logger.info(f"Using Upstox data for {ticker} ({len(df_upstox)} rows)")
+                return df_upstox
+            logger.warning(f"Upstox data unavailable for {ticker}. Falling back to yfinance.")
+
+        # Default: yfinance
+        df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
         # flatten multi-index if necessary (happens in newer yfinance)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(1)
@@ -94,9 +108,9 @@ class TechnicalAnalysisService:
             "vol_surge": float(round(vol_surge, 2))
         }
 
-    def analyze_stock(self, ticker: str):
+    def analyze_stock(self, ticker: str, data_provider: str = "yfinance"):
         try:
-            df = self.fetch_ohlcv(ticker)
+            df = self.fetch_ohlcv(ticker, data_provider=data_provider)
             indicators = self.compute_indicators(df)
             return indicators
         except Exception as e:

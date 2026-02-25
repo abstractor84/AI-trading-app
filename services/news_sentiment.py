@@ -4,6 +4,9 @@ import logging
 from google import genai
 import os
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +41,8 @@ class NewsSentimentService:
             try:
                 from duckduckgo_search import DDGS
                 with DDGS() as ddgs:
-                    results = list(ddgs.news(query, max_results=5))
+                    # DDGS in sync mode might occasionally block, but wait 5 max
+                    results = list(ddgs.text(query, max_results=5, safesearch='off', timelimit='d'))
                     return [r['title'] for r in results]
             except Exception as e:
                 logger.error(f"DDGS search failed for {ticker}: {e}")
