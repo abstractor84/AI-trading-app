@@ -9,6 +9,12 @@ import uvicorn
 import os
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+import pandas as pd
+from pydantic import BaseModel
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import Watchlist, WatchlistStock
 
 load_dotenv()
 
@@ -61,6 +67,8 @@ class ConnectionManager:
             "type": "state_update",
             "capital": state.capital,
             "max_loss": state.max_loss_per_trade,
+            "search_engine": state.search_engine,
+            "data_provider": state.data_provider,
             "open_trades": state.open_trades,
             "closed_trades": state.closed_trades,
             "ai_signals": state.ai_signals,
@@ -79,15 +87,23 @@ def get_market_session():
     elif now < dtime(15, 15): return "EXIT ZONE"
     else: return "Post-Market"
 
-async def perform_ai_screening():
-    logger.info("Starting AI Screening...")
+async def perform_ai_screening(strategy="s1", custom_rules=None):
+    logger.info(f"Starting AI Screening... Strategy: {strategy}")
     await manager.broadcast({"type": "notification", "message": "Starting NSE Market Scan...", "level": "info"})
     
     # 1. Fetch globals
     state.global_context = discovery_svc.fetch_global_indices()
     
-    # 2. Discover & rank
+    # 2. Discover & rank Top Candidates + User Dashboard Stocks
     top_candidates = discovery_svc._get_top_candidates(limit=12)
+    
+    # Merge user dashboard stocks (avoiding duplicates)
+    for user_stock in state.dashboard_watch_stocks:
+        ns_ticker = f"{user_stock}.NS"
+        if ns_ticker not in top_candidates:
+            # We insert at the beginning so they're prioritized for processing
+            top_candidates.insert(0, ns_ticker)
+
     state.selected_candidates = top_candidates
     await manager.broadcast({"type": "notification", "message": f"Found {len(top_candidates)} promising candidates. Generating signals...", "level": "info"})
     
@@ -98,7 +114,7 @@ async def perform_ai_screening():
         if not ta_data:
             continue
             
-        headlines = news_svc.fetch_news(ticker)
+        headlines = news_svc.fetch_news(ticker, search_engine=state.search_engine)
         sentiment = news_svc.score_sentiment(headlines)
         
         # Merge global context into a simpler dict for the prompt to save tokens
@@ -112,12 +128,16 @@ async def perform_ai_screening():
                 "explanation": f"Market session is {session}. No new trades recommended."
             }
         else:
-            rec = ai_svc.generate_recommendation(ticker, ta_data, sentiment, simple_global, state.capital, state.max_loss_per_trade)
+            rec = ai_svc.generate_recommendation(ticker, ta_data, sentiment, simple_global, state.capital, state.max_loss_per_trade, strategy, custom_rules)
+        
+        # Fetch fundamentals
+        fundamentals = ta_svc.fetch_fundamentals(ticker)
         
         signal = {
             "ticker": ticker,
             "ta_data": ta_data,
             "headlines": headlines,
+            "fundamentals": fundamentals,
             "sentiment": sentiment,
             "ai_recommendation": rec,
             "last_updated": datetime.now().strftime("%H:%M:%S")
@@ -132,6 +152,8 @@ async def perform_ai_screening():
         "type": "state_update",
         "capital": state.capital,
         "max_loss": state.max_loss_per_trade,
+        "search_engine": state.search_engine,
+        "data_provider": state.data_provider,
         "open_trades": state.open_trades,
         "closed_trades": state.closed_trades,
         "ai_signals": state.ai_signals,
@@ -191,12 +213,16 @@ async def lifespan(app: FastAPI):
     # Shutdown
     task.cancel()
 
-app = FastAPI(title="Gemini NSE Trader", lifespan=lifespan)
+app = FastAPI(title="Intraday AI Trader", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 async def root():
     return FileResponse("static/index.html")
+
+@app.get("/watchlists")
+async def watchlists_page():
+    return FileResponse("static/watchlists.html")
 
 @app.get("/api/chart/{ticker}")
 async def get_chart_data(ticker: str):
@@ -256,6 +282,95 @@ async def get_chart_data(ticker: str):
         "vwap": vwap_data
     }
 
+# --- Watchlist API ---
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+class WatchlistCreate(BaseModel):
+    name: str
+
+class WatchlistStockCreate(BaseModel):
+    ticker: str
+
+@app.get("/api/watchlists")
+def get_watchlists(db: Session = Depends(get_db)):
+    watchlists = db.query(Watchlist).all()
+    return [{"id": w.id, "name": w.name} for w in watchlists]
+
+@app.post("/api/watchlists")
+def create_watchlist(wl: WatchlistCreate, db: Session = Depends(get_db)):
+    count = db.query(Watchlist).count()
+    if count >= 10:
+        raise HTTPException(status_code=400, detail="Maximum 10 watchlists allowed.")
+    if db.query(Watchlist).filter(Watchlist.name == wl.name).first():
+        raise HTTPException(status_code=400, detail="Watchlist name already exists.")
+    new_wl = Watchlist(name=wl.name)
+    db.add(new_wl)
+    db.commit()
+    db.refresh(new_wl)
+    return {"id": new_wl.id, "name": new_wl.name}
+
+@app.delete("/api/watchlists/{wl_id}")
+def delete_watchlist(wl_id: int, db: Session = Depends(get_db)):
+    wl = db.query(Watchlist).filter(Watchlist.id == wl_id).first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found.")
+    db.query(WatchlistStock).filter(WatchlistStock.watchlist_id == wl_id).delete()
+    db.delete(wl)
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/watchlists/{wl_id}/stocks")
+def get_watchlist_stocks(wl_id: int, db: Session = Depends(get_db)):
+    stocks = db.query(WatchlistStock).filter(WatchlistStock.watchlist_id == wl_id).all()
+    return [s.ticker for s in stocks]
+
+@app.post("/api/watchlists/{wl_id}/stocks")
+def add_watchlist_stock(wl_id: int, stock: WatchlistStockCreate, db: Session = Depends(get_db)):
+    wl = db.query(Watchlist).filter(Watchlist.id == wl_id).first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found.")
+    count = db.query(WatchlistStock).filter(WatchlistStock.watchlist_id == wl_id).count()
+    if count >= 50:
+        raise HTTPException(status_code=400, detail="Maximum 50 stocks per watchlist allowed.")
+    if db.query(WatchlistStock).filter(WatchlistStock.watchlist_id == wl_id, WatchlistStock.ticker == stock.ticker).first():
+        raise HTTPException(status_code=400, detail="Stock already in watchlist.")
+    
+    new_stock = WatchlistStock(watchlist_id=wl_id, ticker=stock.ticker)
+    db.add(new_stock)
+    db.commit()
+    return {"status": "success", "ticker": stock.ticker}
+
+@app.delete("/api/watchlists/{wl_id}/stocks/{ticker}")
+def remove_watchlist_stock(wl_id: int, ticker: str, db: Session = Depends(get_db)):
+    stock = db.query(WatchlistStock).filter(WatchlistStock.watchlist_id == wl_id, WatchlistStock.ticker == ticker).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found in watchlist.")
+    db.delete(stock)
+    db.commit()
+    return {"status": "success"}
+
+class DashboardStockToggle(BaseModel):
+    ticker: str
+
+@app.get("/api/dashboard/stocks")
+def get_dashboard_stocks():
+    return list(state.dashboard_watch_stocks)
+
+@app.post("/api/dashboard/stocks")
+def add_dashboard_stock(data: DashboardStockToggle):
+    state.add_dashboard_stock(data.ticker)
+    return {"status": "success", "ticker": data.ticker, "dashboard_stocks": list(state.dashboard_watch_stocks)}
+
+@app.delete("/api/dashboard/stocks/{ticker}")
+def remove_dashboard_stock(ticker: str):
+    state.remove_dashboard_stock(ticker)
+    return {"status": "success", "ticker": ticker, "dashboard_stocks": list(state.dashboard_watch_stocks)}
+
 @app.post("/api/backtest/{ticker}")
 async def run_backtest_tuner(ticker: str):
     """Run the AI Strategy Tuner for a given ticker."""
@@ -294,9 +409,14 @@ async def websocket_endpoint(websocket: WebSocket):
             action = command.get("action")
             
             if action == "trigger_scan":
-                asyncio.create_task(perform_ai_screening())
+                asyncio.create_task(perform_ai_screening(command.get("strategy"), command.get("custom_rules")))
             elif action == "update_settings":
-                state.update_settings(float(command.get('capital')), float(command.get('max_loss')))
+                state.update_settings(
+                    float(command.get('capital', state.capital)),
+                    float(command.get('max_loss', state.max_loss_per_trade)),
+                    command.get('search_engine', state.search_engine),
+                    command.get('data_provider', state.data_provider)
+                )
                 await manager.send_state(websocket)
             elif action == "log_trade":
                 trade = state.log_trade(

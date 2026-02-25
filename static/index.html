@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gemini NSE Trader</title>
+    <title>Intraday AI Trader</title>
     <link rel="stylesheet" href="/static/css/style.css?v=5">
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap"
@@ -17,7 +17,7 @@
     <header class="app-header">
         <div class="brand">
             <span class="logo-icon">▲</span>
-            <h1>Gemini NSE Trader</h1>
+            <h1>Intraday AI Trader</h1>
         </div>
 
         <div class="app-nav">
@@ -27,6 +27,9 @@
             <button id="nav-backtest-btn" class="nav-btn">
                 <span class="icon">🧪</span> Backtester Lab
             </button>
+            <a href="/watchlists" class="nav-btn" style="text-decoration:none;">
+                <span class="icon">📋</span> Watchlists
+            </a>
         </div>
 
         <div class="app-status">
@@ -54,7 +57,7 @@
         <aside class="sidebar">
             <details class="panel settings-panel">
                 <summary>
-                    <h2>⚙️ Capital Settings</h2>
+                    <h2>⚙️ Global Settings</h2>
                 </summary>
                 <div class="panel-content" style="margin-top: 1rem;">
                     <div class="input-group">
@@ -65,7 +68,22 @@
                         <label>Max Risk/Trade (₹)</label>
                         <input type="number" id="risk-input" value="1000">
                     </div>
-                    <button id="save-settings-btn" class="btn primary" style="width: 100%;">Update Core
+                    <div class="input-group">
+                        <label>Search Engine</label>
+                        <select id="search-engine-input" class="dropdown-style w-100">
+                            <option value="gemini">Gemini (Default)</option>
+                            <option value="tavily">Tavily (API)</option>
+                            <option value="ddgs">DuckDuckGo Search</option>
+                        </select>
+                    </div>
+                    <div class="input-group">
+                        <label>Data Provider</label>
+                        <select id="data-provider-input" class="dropdown-style w-100">
+                            <option value="yfinance">Yahoo Finance (Free)</option>
+                            <option value="upstox">Upstox (Broker API)</option>
+                        </select>
+                    </div>
+                    <button id="save-settings-btn" class="btn primary" style="width: 100%;">Update
                         Settings</button>
                 </div>
             </details>
@@ -82,20 +100,26 @@
                         Range)</label>
                     <label class="strategy-option"><input type="radio" name="strategy" value="s5"> Gap & Go</label>
                     <div class="divider"></div>
-                    <label class="strategy-option custom-algo"><input type="radio" name="strategy" value="c1"> AI Custom
-                        Algo 1</label>
-                    <label class="strategy-option custom-algo"><input type="radio" name="strategy" value="c2"> AI Custom
-                        Algo 2</label>
+                    <div id="custom-strategies-list">
+                        <!-- Dynamic strategies injected here -->
+                    </div>
+                    <button class="btn text-muted mt-2" onclick="openCustomStrategyModal()"
+                        style="width:100%; padding:0.4rem; font-size:0.85rem; border: 1px dashed var(--border-color); background:transparent;">+
+                        Add Custom Core Logic</button>
                 </div>
                 <p class="scan-help" style="margin-top:10px;">Select strategy before AI Scan to predict Entry, Exit,
                     Qty, and Target P&L.</p>
             </section>
 
             <section class="panel action-panel">
-                <button id="trigger-scan-btn" class="btn scan-btn">
-                    <span class="icon">⚡</span> Run AI Screen
+                <button id="trigger-scan-btn" class="btn scan-btn" style="margin-bottom: 10px;">
+                    <span class="icon">⚡</span> Standard AI Screen
                 </button>
-                <p class="scan-help">Scans NSE universe, filters top movers, and scores via Gemini.</p>
+                <button id="magic-scan-btn" class="btn"
+                    style="width: 100%; background: linear-gradient(135deg, #8b5cf6, #3b82f6); color: white; border: none; font-weight: bold; padding: 0.8rem; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);">
+                    <span class="icon" style="font-size: 1.2rem;">✨</span> Magic AI Recommendations
+                </button>
+                <p class="scan-help mt-2">✨ Scans, Enriches, Backtests, and recommends Top 3.</p>
             </section>
 
             <section class="panel pnl-summary-panel">
@@ -117,14 +141,45 @@
 
         <!-- Main Content Area -->
         <main class="main-content">
-            <section class="signals-header">
-                <h2>AI Trading Recommendations</h2>
+            <section class="signals-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2>Live Dashboard Signals</h2>
                 <span id="last-updated-time">--</span>
             </section>
 
-            <div id="signal-cards-container" class="cards-grid">
-                <div class="empty-state massive">
-                    Click "Run AI Screen" to discover trades.
+            <!-- Magic Pane (Hidden by Default) -->
+            <div id="magic-pane" style="display: none; margin-bottom: 2rem;">
+                <div style="display: flex; gap: 2rem; align-items: flex-start;">
+
+                    <div style="flex: 2;">
+                        <h3
+                            style="color: #a855f7; margin-bottom: 1rem; border-bottom: 1px solid rgba(168, 85, 247, 0.3); padding-bottom: 0.5rem;">
+                            ✨ Top 3 AI Recommendations</h3>
+                        <div id="magic-ai-cards" class="cards-grid"
+                            style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+                            <!-- Magic AI Cards Injected Here -->
+                        </div>
+                    </div>
+
+                    <div
+                        style="flex: 1; min-width: 300px; border-left: 1px dashed var(--border-color); padding-left: 2rem;">
+                        <h3
+                            style="color: #10b981; margin-bottom: 1rem; border-bottom: 1px solid rgba(16, 185, 129, 0.3); padding-bottom: 0.5rem;">
+                            ★ Dashboard Watchlist</h3>
+                        <div id="magic-wl-cards" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <!-- Watchlist Cards Injected Here -->
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Standard Scan Results Pane -->
+            <div id="standard-pane">
+                <h3 style="color: var(--text-muted); margin-bottom: 1rem; font-size: 0.9rem;">STANDARD SCAN RESULTS</h3>
+                <div id="signal-cards-container" class="cards-grid">
+                    <div class="empty-state massive">
+                        Click "Standard" or "Magic AI" to discover trades.
+                    </div>
                 </div>
             </div>
 
@@ -212,6 +267,27 @@
         </div>
     </div>
 
+    <!-- Custom Strategy Builder Modal -->
+    <div id="custom-strategy-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2>Build Custom Strategy</h2>
+                <button onclick="closeCustomStrategyModal()" class="close-modal-btn">&times;</button>
+            </div>
+            <div class="input-group" style="margin-top:1rem;">
+                <label>Strategy Name</label>
+                <input type="text" id="cs-name" class="input-style w-100" placeholder="e.g. My RSI Bounce">
+            </div>
+            <div class="input-group">
+                <label>Indicator Rules (e.g. RSI < 30 & MACD> Signal)</label>
+                <textarea id="cs-rules" class="input-style w-100" rows="3" placeholder="Condition logic..."></textarea>
+            </div>
+            <p class="text-muted" style="font-size:0.8rem; margin-top:5px;">Currently rules are injected to the AI
+                prompt as a hint, not strictly vectorized yet.</p>
+            <button class="btn primary w-100 mt-2" onclick="saveCustomStrategy()">Save Strategy</button>
+        </div>
+    </div>
+
     <!-- Templates -->
     <template id="signal-card-template">
         <div class="signal-card">
@@ -237,7 +313,12 @@
                 <div class="level"><span class="label">Qty</span><span class="val qty-val">--</span></div>
             </div>
 
-            <div class="ta-chips">
+            <div class="fundamentals"
+                style="margin-top: 10px; font-size: 0.85rem; display: grid; grid-template-columns: 1fr 1fr; gap: 5px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;">
+                <!-- Fundamentals injected here -->
+            </div>
+
+            <div class="ta-chips" style="margin-top: 10px;">
                 <!-- Chips injected here -->
             </div>
 

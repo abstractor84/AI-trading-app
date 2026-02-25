@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watchlists - Intraday AI Trader</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .watchlists-container {
+            padding: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            color: var(--text-color);
+        }
+
+        .header-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .wl-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .wl-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        .wl-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        .wl-header h3 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: #60a5fa;
+        }
+
+        .wl-stocks {
+            min-height: 150px;
+            max-height: 250px;
+            overflow-y: auto;
+            margin-bottom: 1rem;
+        }
+
+        .wl-stock-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            margin-bottom: 0.5rem;
+            border-radius: 4px;
+            align-items: center;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .wl-stock-item button {
+            background: transparent;
+            border: none;
+            color: var(--color-sell);
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .add-stock-form {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .add-stock-form input {
+            flex: 1;
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+            color: white;
+            padding: 0.5rem;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body class="dark-theme">
+    <header class="app-header">
+        <div class="brand">
+            <span class="logo-icon">▲</span>
+            <h1>Intraday AI Trader</h1>
+        </div>
+        <nav class="app-nav">
+            <a href="/" class="nav-btn" style="text-decoration:none;">Dashboard</a>
+            <button class="nav-btn active">Watchlists</button>
+        </nav>
+    </header>
+
+    <div class="watchlists-container">
+        <div class="header-actions">
+            <div>
+                <h2>Your Watchlists</h2>
+                <p class="scan-help">Create up to 10 watchlists. Add up to 50 NSE tickers to each.</p>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="new-wl-name" placeholder="Watchlist Name"
+                    style="padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-dark); color: white;">
+                <button id="create-wl-btn" class="btn primary">Create New</button>
+            </div>
+        </div>
+
+        <div id="wl-grid" class="wl-grid">
+            <!-- Watchlist cards injected here -->
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <script>
+        const wlGrid = document.getElementById('wl-grid');
+        const createWlBtn = document.getElementById('create-wl-btn');
+        const newWlNameInput = document.getElementById('new-wl-name');
+        const toastContainer = document.getElementById('toast-container');
+
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            toastContainer.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        let dashboardStocks = new Set();
+
+        async function fetchDashboardStocks() {
+            try {
+                const res = await fetch('/api/dashboard/stocks');
+                const data = await res.json();
+                dashboardStocks = new Set(data);
+            } catch (e) {
+                console.error(e);
+            }
+        }
+
+        async function toggleDashboardStock(ticker) {
+            const isAdded = dashboardStocks.has(ticker);
+            const method = isAdded ? 'DELETE' : 'POST';
+            const url = isAdded ? `/api/dashboard/stocks/${ticker}` : '/api/dashboard/stocks';
+
+            try {
+                const opts = { method };
+                if (!isAdded) {
+                    opts.headers = { 'Content-Type': 'application/json' };
+                    opts.body = JSON.stringify({ ticker });
+                }
+                const res = await fetch(url, opts);
+                if (res.ok) {
+                    if (isAdded) {
+                        dashboardStocks.delete(ticker);
+                        showToast(`${ticker} removed from Dashboard`);
+                    } else {
+                        dashboardStocks.add(ticker);
+                        showToast(`${ticker} added to Dashboard`, 'success');
+                    }
+                    // Re-render all stock lists to update button states
+                    fetchWatchlists();
+                }
+            } catch (e) {
+                showToast("Error updating dashboard stocks", "error");
+            }
+        }
+
+        async function fetchWatchlists() {
+            try {
+                const res = await fetch('/api/watchlists');
+                const data = await res.json();
+                renderWatchlists(data);
+            } catch (e) {
+                showToast("Failed to fetch watchlists", "error");
+            }
+        }
+
+        async function createWatchlist() {
+            const name = newWlNameInput.value.trim();
+            if (!name) return;
+            try {
+                const res = await fetch('/api/watchlists', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                if (res.ok) {
+                    newWlNameInput.value = '';
+                    fetchWatchlists();
+                    showToast("Watchlist created", "success");
+                } else {
+                    const err = await res.json();
+                    showToast(err.detail, "error");
+                }
+            } catch (e) {
+                showToast("Error creating watchlist", "error");
+            }
+        }
+
+        async function deleteWatchlist(id) {
+            if (!confirm("Delete this watchlist?")) return;
+            try {
+                const res = await fetch(`/api/watchlists/${id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    fetchWatchlists();
+                    showToast("Watchlist deleted", "success");
+                }
+            } catch (e) {
+                showToast("Error deleting", "error");
+            }
+        }
+
+        async function loadStocks(wlId, containerId) {
+            const res = await fetch(`/api/watchlists/${wlId}/stocks`);
+            const stocks = await res.json();
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            stocks.forEach(ticker => {
+                const div = document.createElement('div');
+                div.className = 'wl-stock-item';
+
+                const isDash = dashboardStocks.has(ticker);
+                const dashColor = isDash ? '#10b981' : 'var(--text-muted)';
+                const dashIcon = isDash ? '★' : '☆';
+                const dashTitle = isDash ? 'Remove from Dashboard' : 'Add to Dashboard';
+
+                div.innerHTML = `
+                    <span>${ticker}</span>
+                    <div style="display:flex; gap: 10px;">
+                        <button title="${dashTitle}" style="color:${dashColor};" onclick="toggleDashboardStock('${ticker}')">${dashIcon}</button>
+                        <button title="Remove from Watchlist" onclick="removeStock(${wlId}, '${ticker}', '${containerId}')">✖</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        async function addStock(wlId, inputId, containerId) {
+            const input = document.getElementById(inputId);
+            let ticker = input.value.trim().toUpperCase();
+            if (!ticker) return;
+            // Remove .NS if user adds it, we will append it cleanly later if needed, but let's encourage RAW ticker
+            ticker = ticker.replace('.NS', '');
+
+            try {
+                const res = await fetch(`/api/watchlists/${wlId}/stocks`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ticker })
+                });
+                if (res.ok) {
+                    input.value = '';
+                    loadStocks(wlId, containerId);
+                    showToast("Stock added", "success");
+                } else {
+                    const err = await res.json();
+                    showToast(err.detail, "error");
+                }
+            } catch (e) {
+                showToast("Error adding stock", "error");
+            }
+        }
+
+        async function removeStock(wlId, ticker, containerId) {
+            try {
+                const res = await fetch(`/api/watchlists/${wlId}/stocks/${ticker}`, { method: 'DELETE' });
+                if (res.ok) {
+                    loadStocks(wlId, containerId);
+                    showToast("Stock removed", "success");
+                }
+            } catch (e) {
+                showToast("Error removing stock", "error");
+            }
+        }
+
+        function renderWatchlists(watchlists) {
+            wlGrid.innerHTML = '';
+            watchlists.forEach(wl => {
+                const card = document.createElement('div');
+                card.className = 'wl-card';
+                const stocksContainerId = `wl-stocks-${wl.id}`;
+                const addInputId = `add-in-${wl.id}`;
+
+                card.innerHTML = `
+                    <div class="wl-header">
+                        <h3>📋 ${wl.name}</h3>
+                        <button class="nav-btn" style="color:var(--color-sell); padding: 0.2rem 0.5rem;" onclick="deleteWatchlist(${wl.id})">Delete</button>
+                    </div>
+                    <div class="wl-stocks" id="${stocksContainerId}">
+                        <div style="text-align:center; color:gray; padding:1rem;">Loading...</div>
+                    </div>
+                    <div class="add-stock-form">
+                        <input type="text" id="${addInputId}" placeholder="e.g. RELIANCE">
+                        <button class="btn primary" onclick="addStock(${wl.id}, '${addInputId}', '${stocksContainerId}')">Add</button>
+                    </div>
+                `;
+                wlGrid.appendChild(card);
+                loadStocks(wl.id, stocksContainerId);
+            });
+        }
+
+        createWlBtn.addEventListener('click', createWatchlist);
+
+        // Initial load
+        async function init() {
+            await fetchDashboardStocks();
+            fetchWatchlists();
+        }
+        init();
+    </script>
+</body>
+
+</html>

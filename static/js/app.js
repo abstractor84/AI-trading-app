@@ -13,8 +13,11 @@ const toastContainer = document.getElementById('toast-container');
 // Settings & Panel Elements
 const capitalInput = document.getElementById('capital-input');
 const riskInput = document.getElementById('risk-input');
+const searchEngineInput = document.getElementById('search-engine-input');
+const dataProviderInput = document.getElementById('data-provider-input');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 const triggerScanBtn = document.getElementById('trigger-scan-btn');
+const magicScanBtn = document.getElementById('magic-scan-btn');
 
 // P&L Elements
 const totalPnlEl = document.getElementById('total-pnl');
@@ -35,8 +38,24 @@ let appState = {
     openTrades: [],
     closedTrades: [],
     aiSignals: [],
-    globalContext: {}
+    globalContext: {},
+    customStrategies: [],
+    searchEngine: 'gemini',
+    dataProvider: 'yfinance',
+    lastScanType: 'standard',
+    dashboardStocks: new Set()
 };
+
+async function fetchDashboardStocks() {
+    try {
+        const res = await fetch('/api/dashboard/stocks');
+        const data = await res.json();
+        appState.dashboardStocks = new Set(data.map(t => t.replace('.NS', '')));
+    } catch (e) {
+        console.error(e);
+    }
+}
+fetchDashboardStocks();
 
 // Start local clock immediately
 setInterval(() => {
@@ -61,6 +80,9 @@ ws.onmessage = (event) => {
     if (data.type === 'state_update') {
         appState.capital = data.capital;
         appState.maxLoss = data.max_loss;
+        if (data.search_engine) appState.searchEngine = data.search_engine;
+        if (data.data_provider) appState.dataProvider = data.data_provider;
+
         appState.openTrades = data.open_trades;
         appState.closedTrades = data.closed_trades;
         appState.aiSignals = data.ai_signals;
@@ -68,6 +90,8 @@ ws.onmessage = (event) => {
 
         capitalInput.value = appState.capital;
         riskInput.value = appState.maxLoss;
+        if (searchEngineInput) searchEngineInput.value = appState.searchEngine;
+        if (dataProviderInput) dataProviderInput.value = appState.dataProvider;
 
         renderGlobalContext();
         renderSignals();
@@ -95,7 +119,9 @@ saveSettingsBtn.addEventListener('click', () => {
     ws.send(JSON.stringify({
         action: 'update_settings',
         capital: capitalInput.value,
-        max_loss: riskInput.value
+        max_loss: riskInput.value,
+        search_engine: searchEngineInput ? searchEngineInput.value : 'gemini',
+        data_provider: dataProviderInput ? dataProviderInput.value : 'yfinance'
     }));
     showToast('Settings Updated', 'success');
 });
@@ -104,16 +130,113 @@ triggerScanBtn.addEventListener('click', () => {
     triggerScanBtn.disabled = true;
     triggerScanBtn.innerHTML = '<span class="icon">⌛</span> Scanning NSE...';
     // Clear old signals
+    document.getElementById('standard-pane').style.display = 'block';
+    document.getElementById('magic-pane').style.display = 'none';
+    appState.lastScanType = 'standard';
     signalCardsContainer.innerHTML = '<div class="empty-state massive">Scanning NSE universe and analyzing technicals + news using AI...</div>';
 
-    ws.send(JSON.stringify({ action: 'trigger_scan' }));
+    const strategyRadio = document.querySelector('input[name="strategy"]:checked');
+    const strategy = strategyRadio ? strategyRadio.value : 's1';
+    let custom_rules = null;
+    if (strategy.startsWith('cs_') && strategyRadio.getAttribute('data-rules')) {
+        custom_rules = atob(strategyRadio.getAttribute('data-rules'));
+    }
+
+    ws.send(JSON.stringify({ action: 'trigger_scan', strategy, custom_rules }));
 
     // Re-enable after 30s as fallback
     setTimeout(() => {
         triggerScanBtn.disabled = false;
-        triggerScanBtn.innerHTML = '<span class="icon">⚡</span> Run AI Screen';
+        triggerScanBtn.innerHTML = '<span class="icon">⚡</span> Standard AI Screen';
     }, 60000);
 });
+
+magicScanBtn.addEventListener('click', () => {
+    magicScanBtn.disabled = true;
+    magicScanBtn.innerHTML = '<span class="icon">⌛</span> Running Magic Pipeline...';
+
+    document.getElementById('standard-pane').style.display = 'none';
+    document.getElementById('magic-pane').style.display = 'block';
+    appState.lastScanType = 'magic';
+
+    const magicAiCards = document.getElementById('magic-ai-cards');
+    const magicWlCards = document.getElementById('magic-wl-cards');
+    magicAiCards.innerHTML = '<div class="empty-state massive">Vectorizing top 10 stocks. Backtesting 7 strategies. Analyzing news...</div>';
+    magicWlCards.innerHTML = '<div class="empty-state massive">Fetching watchlist technicals...</div>';
+
+    fetchDashboardStocks(); // Refresh WL
+
+    const strategyRadio = document.querySelector('input[name="strategy"]:checked');
+    const strategy = strategyRadio ? strategyRadio.value : 's1';
+    let custom_rules = null;
+    if (strategy.startsWith('cs_') && strategyRadio.getAttribute('data-rules')) {
+        custom_rules = atob(strategyRadio.getAttribute('data-rules'));
+    }
+
+    ws.send(JSON.stringify({ action: 'trigger_scan', strategy, custom_rules }));
+
+    setTimeout(() => {
+        magicScanBtn.disabled = false;
+        magicScanBtn.innerHTML = '<span class="icon">✨</span> Magic AI Recommendations';
+    }, 60000);
+});
+
+// Custom Strategy Logic
+const csModal = document.getElementById('custom-strategy-modal');
+const csNameInput = document.getElementById('cs-name');
+const csRulesInput = document.getElementById('cs-rules');
+const csListContainer = document.getElementById('custom-strategies-list');
+
+function openCustomStrategyModal() {
+    csModal.style.display = 'flex';
+}
+
+function closeCustomStrategyModal() {
+    csModal.style.display = 'none';
+    csNameInput.value = '';
+    csRulesInput.value = '';
+}
+
+function saveCustomStrategy() {
+    const name = csNameInput.value.trim();
+    const rules = csRulesInput.value.trim();
+    if (!name || !rules) {
+        showToast('Please enter both name and rules', 'error');
+        return;
+    }
+
+    // Create safe ID
+    const id = 'cs_' + Date.now();
+    appState.customStrategies.push({ id, name, rules });
+
+    renderCustomStrategies();
+    closeCustomStrategyModal();
+    showToast('Custom Strategy Saved!', 'success');
+}
+
+function renderCustomStrategies() {
+    csListContainer.innerHTML = '';
+    appState.customStrategies.forEach(cs => {
+        const label = document.createElement('label');
+        label.className = 'strategy-option custom-algo';
+        label.style.display = 'flex';
+        label.style.justifyContent = 'space-between';
+
+        label.innerHTML = `
+            <div>
+                <input type="radio" name="strategy" value="${cs.id}" data-rules="${btoa(cs.rules)}">
+                <span style="color:#a78bfa;">${cs.name}</span>
+            </div>
+            <button class="nav-btn" style="padding:0; min-height:0; color:var(--color-sell);" onclick="removeCustomStrategy('${cs.id}')">&times;</button>
+        `;
+        csListContainer.appendChild(label);
+    });
+}
+
+function removeCustomStrategy(id) {
+    appState.customStrategies = appState.customStrategies.filter(cs => cs.id !== id);
+    renderCustomStrategies();
+}
 
 // Rendering Functions
 function renderGlobalContext() {
@@ -168,7 +291,17 @@ function renderSignals() {
         return;
     }
 
-    signalCardsContainer.innerHTML = '';
+    const magicAiCards = document.getElementById('magic-ai-cards');
+    const magicWlCards = document.getElementById('magic-wl-cards');
+
+    if (appState.lastScanType === 'standard') {
+        signalCardsContainer.innerHTML = '';
+    } else {
+        magicAiCards.innerHTML = '';
+        magicWlCards.innerHTML = '';
+    }
+
+    let magicAiCount = 0;
     const template = document.getElementById('signal-card-template');
 
     appState.aiSignals.forEach(signal => {
@@ -221,6 +354,23 @@ function renderSignals() {
         clone.querySelector('.t2-val').textContent = t2Val;
         clone.querySelector('.qty-val').textContent = ai.recommended_quantity || '--';
 
+        // Fundamentals
+        const funContainer = clone.querySelector('.fundamentals');
+        if (signal.fundamentals) {
+            const f = signal.fundamentals;
+            const mktCap = f.market_cap !== 'N/A' && f.market_cap ? '₹' + (f.market_cap / 10000000).toFixed(2) + 'Cr' : 'N/A';
+            const pe = f.pe_ratio !== 'N/A' && f.pe_ratio ? f.pe_ratio.toFixed(1) : 'N/A';
+            const div = f.dividend_yield !== 'N/A' && f.dividend_yield ? (f.dividend_yield * 100).toFixed(1) + '%' : 'N/A';
+
+            funContainer.innerHTML = `
+                <div><span class="text-muted">Mkt Cap:</span> ${mktCap}</div>
+                <div><span class="text-muted">P/E:</span> ${pe}</div>
+                <div style="grid-column: span 2;"><span class="text-muted">Sector:</span> ${f.sector || 'N/A'}</div>
+            `;
+        } else {
+            funContainer.innerHTML = `<div style="grid-column: span 2; text-align: center; color: var(--text-muted);">No fundamentals available</div>`;
+        }
+
         // TA Chips
         const chipsContainer = clone.querySelector('.ta-chips');
         const chips = [
@@ -255,8 +405,27 @@ function renderSignals() {
             logBtn.style.display = 'none'; // Only allow 1-click log for real signals
         }
 
-        signalCardsContainer.appendChild(clone);
+        if (appState.lastScanType === 'standard') {
+            signalCardsContainer.appendChild(clone);
+        } else {
+            // Magic Pane Logic
+            if (appState.dashboardStocks.has(cleanTicker)) {
+                magicWlCards.appendChild(clone);
+            } else if (magicAiCount < 3) {
+                magicAiCards.appendChild(clone);
+                magicAiCount++;
+            }
+        }
     });
+
+    if (appState.lastScanType === 'magic') {
+        if (magicWlCards.children.length === 0) {
+            magicWlCards.innerHTML = '<div class="text-muted" style="text-align:center; padding: 2rem;">No watchlist stocks found in this scan. Add some from the Watchlists page!</div>';
+        }
+        if (magicAiCards.children.length === 0) {
+            magicAiCards.innerHTML = '<div class="text-muted" style="text-align:center; padding: 2rem;">No top recommendations met the criteria.</div>';
+        }
+    }
 }
 
 function renderTrades() {

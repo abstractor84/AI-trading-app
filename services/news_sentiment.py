@@ -16,9 +16,34 @@ class NewsSentimentService:
             self.client = None
             logger.warning("GEMINI_API_KEY not found. Sentiment will be NEUTRAL.")
 
-    def fetch_news(self, ticker: str) -> list[str]:
-        """Fetch latest news headlines for the ticker using Google News RSS."""
+    def fetch_news(self, ticker: str, search_engine: str = "gemini") -> list[str]:
+        """Fetch latest news headlines for the ticker using the specified search engine."""
         clean_ticker = ticker.replace(".NS", "")
+        query = f"{clean_ticker} NSE India stock market news today"
+        
+        if search_engine == "tavily":
+            try:
+                from tavily import TavilyClient
+                tavily_key = os.getenv("TAVILY_API_KEY")
+                if tavily_key:
+                    tclient = TavilyClient(api_key=tavily_key)
+                    res = tclient.search(query=query, search_depth="basic", max_results=5)
+                    return [r['title'] for r in res.get('results', [])]
+                else:
+                    logger.warning("Tavily API key missing. Falling back to default.")
+            except Exception as e:
+                logger.error(f"Tavily search failed for {ticker}: {e}")
+                
+        elif search_engine == "ddgs":
+            try:
+                from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    results = list(ddgs.news(query, max_results=5))
+                    return [r['title'] for r in results]
+            except Exception as e:
+                logger.error(f"DDGS search failed for {ticker}: {e}")
+
+        # Fallback to Google News RSS (Default / Gemini)
         url = f"https://news.google.com/rss/search?q={clean_ticker}+NSE+stock&hl=en-IN&gl=IN&ceid=IN:en"
         try:
             response = requests.get(url, timeout=5)
@@ -27,7 +52,7 @@ class NewsSentimentService:
             headlines = [item.title.text for item in items[:5]] # top 5 recent headlines
             return headlines
         except Exception as e:
-            logger.error(f"Error fetching news for {ticker}: {e}")
+            logger.error(f"Error fetching RSS news for {ticker}: {e}")
             return []
 
     def score_sentiment(self, headlines: list[str]) -> dict:

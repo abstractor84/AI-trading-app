@@ -102,3 +102,19 @@ class TechnicalAnalysisService:
         except Exception as e:
             logger.error(f"Error computing TA for {ticker}: {e}")
             return None
+
+    def fetch_fundamentals(self, ticker: str):
+        """Fetch basic fundamental data via yfinance."""
+        try:
+            info = yf.Ticker(ticker).info
+            return {
+                "market_cap": info.get("marketCap", "N/A"),
+                "pe_ratio": info.get("trailingPE", "N/A"),
+                "sector": info.get("sector", "N/A"),
+                "dividend_yield": info.get("dividendYield", "N/A"),
+                "52_week_high": info.get("fiftyTwoWeekHigh", "N/A"),
+                "52_week_low": info.get("fiftyTwoWeekLow", "N/A")
+            }
+        except Exception as e:
+            logger.error(f"Error fetching fundamentals for {ticker}: {e}")
+            return {}

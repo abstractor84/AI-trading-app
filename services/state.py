@@ -16,8 +16,12 @@ class AppState:
         # Load from DB on init
         self._load_from_db()
 
+        self.search_engine = 'gemini'
+        self.data_provider = 'yfinance'
+        
         self.ai_signals = []
         self.global_context = {}
+        self.dashboard_watch_stocks = set()
         
         self.last_reset_date = datetime.now().date()
         
@@ -60,9 +64,11 @@ class AppState:
             self._load_from_db() # Refetch any open ones that carried over somehow
             self.last_reset_date = current_date
             
-    def update_settings(self, capital: float, max_loss: float):
+    def update_settings(self, capital: float, max_loss: float, search_engine: str = 'gemini', data_provider: str = 'yfinance'):
         self.capital = capital
         self.max_loss_per_trade = max_loss
+        self.search_engine = search_engine
+        self.data_provider = data_provider
         
     def log_trade(self, ticker: str, action: str, qty: int, entry_price: float, sl: float, t1: float, t2: float):
         trade_id = str(uuid.uuid4())
@@ -103,3 +109,9 @@ class AppState:
                 self.closed_trades.append(tdict)
                 return tdict
         return None
+
+    def add_dashboard_stock(self, ticker: str):
+        self.dashboard_watch_stocks.add(ticker)
+
+    def remove_dashboard_stock(self, ticker: str):
+        self.dashboard_watch_stocks.discard(ticker)

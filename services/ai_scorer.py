@@ -14,15 +14,21 @@ class AIScorerService:
             self.client = None
             logger.error("GEMINI_API_KEY is required for the AIScorerService!")
 
-    def generate_recommendation(self, ticker: str, ta_data: dict, sentiment: dict, global_context: dict, capital: float, max_loss_per_trade: float) -> dict:
+    def generate_recommendation(self, ticker: str, ta_data: dict, sentiment: dict, global_context: dict, capital: float, max_loss_per_trade: float, strategy: str = "s1", custom_rules: str = None) -> dict:
         """Generate trade recommendation using Gemini based on combined signals."""
         if not self.client:
             return self._fallback_response(ticker)
+
+        strategy_context = f"Selected Strategy Profile: {strategy}"
+        if custom_rules:
+            strategy_context += f"\nCRITICAL CUSTOM RULES PROVIDED BY USER:\n{custom_rules}\n(You MUST evaluate these exact constraints against the TA data. If they are not met, score confidence lower or declare AVOID, explaining why the custom rules failed)."
 
         # Build prompt
         prompt = f"""
         You are an expert intraday equities trader on the Indian National Stock Exchange (NSE). 
         You are analyzing "{ticker}" for a day trade.
+        
+        {strategy_context}
         
         Here are the real-time 5-minute technical indicators:
         {json.dumps(ta_data, indent=2)}

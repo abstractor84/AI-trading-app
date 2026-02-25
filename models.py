@@ -28,5 +28,20 @@ class StockDetail(Base):
     sentiment_json = Column(String)
     ai_recommendation_json = Column(String)
 
+class Watchlist(Base):
+    __tablename__ = "watchlists"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class WatchlistStock(Base):
+    __tablename__ = "watchlist_stocks"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    watchlist_id = Column(Integer, index=True)
+    ticker = Column(String, index=True)
+    added_at = Column(DateTime, default=datetime.utcnow)
+
 # Create tables
 Base.metadata.create_all(bind=engine)
