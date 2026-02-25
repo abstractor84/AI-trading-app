@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini NSE Trader</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=5">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+
+<body>
+    <!-- App Header -->
+    <header class="app-header">
+        <div class="brand">
+            <span class="logo-icon">▲</span>
+            <h1>Gemini NSE Trader</h1>
+        </div>
+
+        <div class="app-nav">
+            <button id="nav-dashboard-btn" class="nav-btn active">
+                <span class="icon">📈</span> Live Dashboard
+            </button>
+            <button id="nav-backtest-btn" class="nav-btn">
+                <span class="icon">🧪</span> Backtester Lab
+            </button>
+        </div>
+
+        <div class="app-status">
+            <div class="vix-display" id="vix-display">
+                VIX: <span id="vix-val">--</span>
+            </div>
+            <div id="session-name" class="session-badge">Session: --</div>
+            <div id="ist-clock">--:--:--</div>
+            <div id="ws-status" class="status-indicator"></div>
+        </div>
+    </header>
+
+    <!-- Full-Width India Ticker Bar -->
+    <div class="ticker-bar">
+        <div class="market-ticker" id="india-indices">
+            <div id="row-india" class="ticker-row">
+                <span class="row-label">India:</span>
+                <span class="ticker-content">Loading...</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <details class="panel settings-panel">
+                <summary>
+                    <h2>⚙️ Capital Settings</h2>
+                </summary>
+                <div class="panel-content" style="margin-top: 1rem;">
+                    <div class="input-group">
+                        <label>Capital (₹)</label>
+                        <input type="number" id="capital-input" value="100000">
+                    </div>
+                    <div class="input-group">
+                        <label>Max Risk/Trade (₹)</label>
+                        <input type="number" id="risk-input" value="1000">
+                    </div>
+                    <button id="save-settings-btn" class="btn primary" style="width: 100%;">Update Core
+                        Settings</button>
+                </div>
+            </details>
+
+            <section class="panel strategy-panel">
+                <h2>🤖 Intraday Strategies</h2>
+                <div class="strategies-list">
+                    <label class="strategy-option"><input type="radio" name="strategy" value="s1" checked> Momentum
+                        Breakout</label>
+                    <label class="strategy-option"><input type="radio" name="strategy" value="s2"> Mean
+                        Reversion</label>
+                    <label class="strategy-option"><input type="radio" name="strategy" value="s3"> VWAP Bounce</label>
+                    <label class="strategy-option"><input type="radio" name="strategy" value="s4"> ORB (Open
+                        Range)</label>
+                    <label class="strategy-option"><input type="radio" name="strategy" value="s5"> Gap & Go</label>
+                    <div class="divider"></div>
+                    <label class="strategy-option custom-algo"><input type="radio" name="strategy" value="c1"> AI Custom
+                        Algo 1</label>
+                    <label class="strategy-option custom-algo"><input type="radio" name="strategy" value="c2"> AI Custom
+                        Algo 2</label>
+                </div>
+                <p class="scan-help" style="margin-top:10px;">Select strategy before AI Scan to predict Entry, Exit,
+                    Qty, and Target P&L.</p>
+            </section>
+
+            <section class="panel action-panel">
+                <button id="trigger-scan-btn" class="btn scan-btn">
+                    <span class="icon">⚡</span> Run AI Screen
+                </button>
+                <p class="scan-help">Scans NSE universe, filters top movers, and scores via Gemini.</p>
+            </section>
+
+            <section class="panel pnl-summary-panel">
+                <h2>Live P&L</h2>
+                <div class="pnl-huge" id="total-pnl">₹0.00</div>
+                <div class="pnl-stats">
+                    <span>Open: <span id="open-count">0</span></span>
+                    <span>Closed: <span id="closed-count">0</span></span>
+                </div>
+            </section>
+
+            <section class="panel open-trades-panel">
+                <h2>Open Positions</h2>
+                <div id="open-trades-list" class="trades-list">
+                    <div class="empty-state">No open positions</div>
+                </div>
+            </section>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <section class="signals-header">
+                <h2>AI Trading Recommendations</h2>
+                <span id="last-updated-time">--</span>
+            </section>
+
+            <div id="signal-cards-container" class="cards-grid">
+                <div class="empty-state massive">
+                    Click "Run AI Screen" to discover trades.
+                </div>
+            </div>
+
+            <section class="closed-trades-section">
+                <h2>Today's Trade History</h2>
+                <table class="trades-table" id="closed-trades-table">
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Action</th>
+                            <th>Entry</th>
+                            <th>Exit</th>
+                            <th>Qty</th>
+                            <th>P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="closed-trades-body">
+                        <!-- Populated via WS -->
+                    </tbody>
+                </table>
+            </section>
+        </main>
+
+        <!-- Backtest Lab Section (Hidden by default) -->
+        <main id="backtest-lab-section" class="main-content" style="display: none;">
+            <section class="signals-header">
+                <h2>AI Strategy Backtester</h2>
+            </section>
+
+            <p class="text-muted mb-4">Run a 60-day vectorized simulation on 5-min intervals. Gemini will analyze the
+                first run and automatically mutate parameters to improve the Sharpe/Win-Rate in a self-healing loop.</p>
+
+            <div class="backtest-controls panel">
+                <input type="text" id="bt-ticker-input" class="bg-dark text-light border-gray input-style"
+                    placeholder="Ticker (e.g. RELIANCE)" value="RELIANCE">
+                <button id="run-bt-btn" class="btn primary">Start AI Optimization</button>
+            </div>
+
+            <div id="bt-loading" style="display: none; margin-top:20px;">
+                <div class="empty-state massive">Vectorizing trades & querying Gemini 3.0 Pro... This takes ~15 seconds.
+                </div>
+            </div>
+
+            <div id="bt-results-container" style="display: none; margin-top: 20px;">
+                <div class="panel">
+                    <h3>Final Optimized Metrics</h3>
+                    <div class="cards-grid" style="grid-template-columns: repeat(4, 1fr); margin-top: 15px;">
+                        <div class="stat-card"><span>Total Trades</span>
+                            <h4 id="bt-trades">--</h4>
+                        </div>
+                        <div class="stat-card"><span>Win Rate</span>
+                            <h4 id="bt-winrate">--</h4>
+                        </div>
+                        <div class="stat-card"><span>Net Profit</span>
+                            <h4 id="bt-profit">--</h4>
+                        </div>
+                        <div class="stat-card"><span>Max Drawdown</span>
+                            <h4 id="bt-mdd">--</h4>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel" style="margin-top: 20px;">
+                    <h3>AI Discovered Parameters</h3>
+                    <pre id="bt-params"
+                        style="background:#0f1115; padding:15px; border-radius:8px; color:#10b981; margin-top:10px;"></pre>
+                </div>
+            </div>
+        </main>
+    </div>
+
+
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Chart Modal -->
+    <div id="chart-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content chart-modal-content">
+            <div class="modal-header">
+                <h2 id="chart-modal-title">Chart</h2>
+                <button id="close-chart-btn" class="close-modal-btn">&times;</button>
+            </div>
+            <div id="tv-chart-container" style="width: 100%; height: 400px;"></div>
+        </div>
+    </div>
+
+    <!-- Templates -->
+    <template id="signal-card-template">
+        <div class="signal-card">
+            <div class="card-header">
+                <h3 class="ticker-name">RELIANCE</h3>
+                <div class="sentiment-badge">NEUTRAL</div>
+            </div>
+            <div class="price-action">
+                <div class="current-price">₹--</div>
+                <div class="recommendation-badge">WATCH</div>
+            </div>
+            <div class="ai-score-bar">
+                <div class="score-fill" style="width: 0%"></div>
+                <span class="score-text">Score: 0/100</span>
+            </div>
+            <p class="explanation"></p>
+
+            <div class="trade-levels">
+                <div class="level"><span class="label">Entry</span><span class="val entry-val">--</span></div>
+                <div class="level sl-level"><span class="label">SL</span><span class="val sl-val">--</span></div>
+                <div class="level t1-level"><span class="label">T1</span><span class="val t1-val">--</span></div>
+                <div class="level t2-level"><span class="label">T2</span><span class="val t2-val">--</span></div>
+                <div class="level"><span class="label">Qty</span><span class="val qty-val">--</span></div>
+            </div>
+
+            <div class="ta-chips">
+                <!-- Chips injected here -->
+            </div>
+
+            <button class="log-trade-btn btn">Log Trade</button>
+        </div>
+    </template>
+
+    <!-- Global Indices Footer -->
+    <footer class="app-footer">
+        <div class="market-ticker" id="global-indices">
+            <div id="row-global" class="ticker-row">
+                <span class="row-label">Global:</span>
+                <span class="ticker-content">Loading...</span>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/js/app.js?v=5"></script>
+</body>
+
+</html>
