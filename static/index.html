@@ -76,6 +76,13 @@
                             <option value="ddgs">DuckDuckGo Search</option>
                         </select>
                     </div>
+                    <div class="input-group" style="flex-direction:row;align-items:center;gap:8px;padding:6px 0;">
+                        <input type="checkbox" id="search-fallback-input"
+                            style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent);">
+                        <label for="search-fallback-input" style="margin:0;cursor:pointer;font-size:13px;">Enable Search
+                            Fallback <span style="color:var(--text-muted);font-size:11px;">(cascade to other engines if
+                                selected fails)</span></label>
+                    </div>
                     <div class="input-group">
                         <label>Data Provider</label>
                         <select id="data-provider-input" class="dropdown-style w-100">
@@ -352,7 +359,7 @@
         </div>
     </footer>
 
-    <script src="/static/js/app.js?v=6"></script>
+    <script src="/static/js/app.js?v=7"></script>
 </body>
 
 </html>

@@ -87,45 +87,44 @@ class NewsSentimentService:
             self.client = None
             logger.warning("GEMINI_API_KEY not found. Sentiment will use keyword fallback.")
 
-    def fetch_news(self, ticker: str, search_engine: str = "gemini") -> list[str]:
+    def fetch_news(self, ticker: str, search_engine: str = "gemini", fallback: bool = False) -> list[str]:
         """
-        Fetch latest news headlines using a cascading fallback chain.
-        Primary engine is chosen by `search_engine`. On any failure, the chain
-        automatically falls through: Tavily → DDGS → Google News RSS.
+        Fetch news headlines.
+        fallback=False (default): fail fast — only use the selected engine.
+        fallback=True: cascade through available engines until one succeeds.
         """
         clean_ticker = ticker.replace(".NS", "")
         query = f"{clean_ticker} NSE India stock market news today"
 
-        # Try the preferred engine first
         if search_engine == "tavily":
             headlines = _tavily_fetch(query)
-            if headlines:
+            if headlines or not fallback:
                 return headlines
-            logger.warning(f"Tavily returned no results for {ticker}. Trying DDGS.")
+            logger.info(f"Tavily empty for {ticker}. Fallback enabled — trying DDGS.")
             headlines = _ddgs_fetch(query)
-            if headlines:
+            if headlines or not fallback:
                 return headlines
-            logger.warning(f"DDGS returned no results for {ticker}. Trying RSS.")
+            logger.info(f"DDGS empty for {ticker}. Falling back to RSS.")
             return _rss_fetch(clean_ticker)
 
         elif search_engine == "ddgs":
             headlines = _ddgs_fetch(query)
-            if headlines:
+            if headlines or not fallback:
                 return headlines
-            logger.warning(f"DDGS returned no results for {ticker}. Trying RSS.")
+            logger.info(f"DDGS empty for {ticker}. Fallback enabled — trying RSS.")
             return _rss_fetch(clean_ticker)
 
-        else:
-            # Default: try RSS first (fast), then cascade to DDGS if empty
+        else:  # gemini / default = RSS
             headlines = _rss_fetch(clean_ticker)
-            if headlines:
+            if headlines or not fallback:
                 return headlines
-            logger.warning(f"RSS empty for {ticker}. Cascading to DDGS.")
+            logger.info(f"RSS empty for {ticker}. Fallback enabled — trying DDGS.")
             headlines = _ddgs_fetch(query)
-            if headlines:
+            if headlines or not fallback:
                 return headlines
-            logger.warning(f"DDGS also empty for {ticker}. Trying Tavily.")
+            logger.info(f"DDGS empty for {ticker}. Falling back to Tavily.")
             return _tavily_fetch(query)
+
 
     def score_sentiment(self, headlines: list[str]) -> dict:
         """

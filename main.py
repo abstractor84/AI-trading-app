@@ -127,7 +127,7 @@ async def perform_ai_screening(strategy="s1", custom_rules=None):
         if not ta_data:
             continue
             
-        headlines = news_svc.fetch_news(ticker, search_engine=state.search_engine)
+        headlines = news_svc.fetch_news(ticker, search_engine=state.search_engine, fallback=state.search_fallback)
         sentiment = news_svc.score_sentiment(headlines)
         
         # Merge global context into a simpler dict for the prompt to save tokens
@@ -167,6 +167,7 @@ async def perform_ai_screening(strategy="s1", custom_rules=None):
         "max_loss": state.max_loss_per_trade,
         "search_engine": state.search_engine,
         "data_provider": state.data_provider,
+        "search_fallback": state.search_fallback,
         "open_trades": state.open_trades,
         "closed_trades": state.closed_trades,
         "ai_signals": state.ai_signals,
@@ -503,7 +504,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     float(command.get('capital', state.capital)),
                     float(command.get('max_loss', state.max_loss_per_trade)),
                     command.get('search_engine', state.search_engine),
-                    command.get('data_provider', state.data_provider)
+                    command.get('data_provider', state.data_provider),
+                    bool(command.get('search_fallback', state.search_fallback))
                 )
                 await manager.send_state(websocket)
             elif action == "log_trade":

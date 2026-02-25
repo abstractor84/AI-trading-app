@@ -81,6 +81,10 @@ ws.onmessage = (event) => {
         appState.capital = data.capital;
         appState.maxLoss = data.max_loss;
         if (data.search_engine) appState.searchEngine = data.search_engine;
+        if (data.search_engine && searchEngineInput) searchEngineInput.value = data.search_engine;
+        // Sync fallback checkbox
+        const fbCheckbox = document.getElementById('search-fallback-input');
+        if (fbCheckbox && data.search_fallback !== undefined) fbCheckbox.checked = data.search_fallback;
         if (data.data_provider) appState.dataProvider = data.data_provider;
 
         appState.openTrades = data.open_trades;
@@ -116,12 +120,14 @@ ws.onmessage = (event) => {
 
 // UI Triggers
 saveSettingsBtn.addEventListener('click', () => {
+    const fallbackCheckbox = document.getElementById('search-fallback-input');
     ws.send(JSON.stringify({
         action: 'update_settings',
         capital: capitalInput.value,
         max_loss: riskInput.value,
         search_engine: searchEngineInput ? searchEngineInput.value : 'gemini',
-        data_provider: dataProviderInput ? dataProviderInput.value : 'yfinance'
+        data_provider: dataProviderInput ? dataProviderInput.value : 'yfinance',
+        search_fallback: fallbackCheckbox ? fallbackCheckbox.checked : false
     }));
     showToast('Settings Updated', 'success');
 });
