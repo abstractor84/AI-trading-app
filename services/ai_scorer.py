@@ -66,8 +66,8 @@ class AIScorerService:
         }}
         """
 
-        try:
-            model_name = 'gemini-3.0-pro'
+        # Try models in order — stop on first success, skip on 404/429
+        for model_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
             try:
                 response = self.client.models.generate_content(
                     model=model_name,
@@ -77,25 +77,21 @@ class AIScorerService:
                         temperature=0.2
                     )
                 )
+                data = json.loads(response.text)
+                data["ai_composite_score"] = data.get("confidence_score", 0)
+                return data
             except Exception as e:
-                logger.warning(f"Gemini 3.0 Pro failed, falling back to 2.5: {e}")
-                model_name = 'gemini-2.5-pro'
-                response = self.client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=genai.types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.2
-                    )
-                )
-            
-            data = json.loads(response.text)
-            # Add AI score which we map from confidence
-            data["ai_composite_score"] = data.get("confidence_score", 0)
-            return data
-        except Exception as e:
-            logger.error(f"Error generating AI signal for {ticker}: {e}")
-            return self._fallback_response(ticker)
+                err_str = str(e)
+                if '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str:
+                    logger.warning(f"Gemini rate limit on {model_name}, trying next.")
+                elif '404' in err_str or 'NOT_FOUND' in err_str:
+                    logger.warning(f"Gemini model {model_name} not found, trying next.")
+                else:
+                    logger.error(f"Gemini {model_name} error for {ticker}: {e}")
+                    break  # Non-retryable error
+
+        logger.error(f"All Gemini models failed for {ticker}. Returning fallback.")
+        return self._fallback_response(ticker)
 
     def _fallback_response(self, ticker):
         return {

@@ -759,10 +759,12 @@ async function connectUpstox() {
     }
 }
 
-// Wire up events after DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
+// Wire up events — DOM is already ready since this script is at bottom of <body>
+(function initUpstox() {
     const connectBtn = document.getElementById('upstox-connect-btn');
-    if (connectBtn) connectBtn.addEventListener('click', connectUpstox);
+    if (connectBtn) {
+        connectBtn.addEventListener('click', connectUpstox);
+    }
 
     // Re-check status whenever settings panel is opened
     const settingsPanel = document.querySelector('details.settings-panel');
@@ -771,5 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (settingsPanel.open) checkUpstoxStatus();
         });
     }
+
+    // Run an initial status check
     checkUpstoxStatus();
-});
+})();

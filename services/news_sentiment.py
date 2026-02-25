@@ -66,7 +66,12 @@ def _ddgs_fetch(query: str) -> list[str]:
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=5, safesearch='off', timelimit='d'))
+            # Use news() — more targeted for financial news than text()
+            results = list(ddgs.news(query, max_results=5))
+            if results:
+                return [r['title'] for r in results]
+            # fallback: broader text search without timelimit
+            results = list(ddgs.text(query, max_results=5))
             return [r['title'] for r in results]
     except Exception as e:
         logger.error(f"DDGS fetch failed: {e}")
@@ -142,7 +147,7 @@ class NewsSentimentService:
         {{"sentiment": "POSITIVE|NEGATIVE|NEUTRAL", "reason": "Short 1-sentence explanation"}}
         """
 
-        for model_name in ['gemini-3.0-flash', 'gemini-2.5-flash', 'gemini-2.0-flash']:
+        for model_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
             try:
                 response = self.client.models.generate_content(
                     model=model_name,
@@ -157,6 +162,8 @@ class NewsSentimentService:
                 err_str = str(e)
                 if '429' in err_str or 'RESOURCE_EXHAUSTED' in err_str:
                     logger.warning(f"Gemini rate limit hit on {model_name}, trying next model.")
+                elif '404' in err_str or 'NOT_FOUND' in err_str:
+                    logger.warning(f"Gemini model {model_name} not found, trying next.")
                 else:
                     logger.warning(f"{model_name} failed: {e}")
 
