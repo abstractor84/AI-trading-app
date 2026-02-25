@@ -146,7 +146,7 @@ class NewsSentimentService:
         {{"sentiment": "POSITIVE|NEGATIVE|NEUTRAL", "reason": "Short 1-sentence explanation"}}
         """
 
-        for model_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
+        for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']:
             try:
                 response = self.client.models.generate_content(
                     model=model_name,

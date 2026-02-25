@@ -67,7 +67,7 @@ class AIScorerService:
         """
 
         # Try models in order — stop on first success, skip on 404/429
-        for model_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-flash-8b']:
+        for model_name in ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']:
             try:
                 response = self.client.models.generate_content(
                     model=model_name,
