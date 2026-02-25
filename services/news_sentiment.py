@@ -81,11 +81,17 @@ def _ddgs_fetch(query: str) -> list[str]:
 class NewsSentimentService:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
+        self.tavily_key = os.getenv("TAVILY_API_KEY")
+
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
         else:
             self.client = None
-            logger.warning("GEMINI_API_KEY not found. Sentiment will use keyword fallback.")
+            logger.warning("GEMINI_API_KEY not found in .env. Sentiment scoring will use local keyword fallback.")
+
+        if not self.tavily_key:
+            logger.warning("TAVILY_API_KEY not found in .env. Tavily search will be skipped.")
+
 
     def fetch_news(self, ticker: str, search_engine: str = "gemini", fallback: bool = False) -> list[str]:
         """

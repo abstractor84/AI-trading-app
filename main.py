@@ -1,33 +1,35 @@
+import os
 import asyncio
 import json
 import logging
+from dotenv import load_dotenv, set_key
+
+# 1. Load Environment Variables immediately before any service imports
+_DOT_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(_DOT_ENV_PATH)
+
 import requests as http_requests
 from datetime import datetime, time as dtime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
-from dotenv import load_dotenv, set_key
 import uvicorn
-import os
 from contextlib import asynccontextmanager
 import pandas as pd
 from pydantic import BaseModel
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Watchlist, WatchlistStock
 
 # Upstox OAuth constants
 _UPSTOX_REDIRECT_URI = os.getenv("UPSTOX_REDIRECT_URI", "http://localhost:8000")
-_DOT_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
-
-load_dotenv()
 
 from services.stock_discovery import StockDiscoveryService
 from services.technical_analysis import TechnicalAnalysisService
 from services.news_sentiment import NewsSentimentService
 from services.ai_scorer import AIScorerService
 from services.state import AppState
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

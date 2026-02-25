@@ -2,6 +2,9 @@ import os
 import json
 import logging
 from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
