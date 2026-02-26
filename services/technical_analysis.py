@@ -25,19 +25,38 @@ class TechnicalAnalysisService:
                 return df_upstox
             logger.warning(f"Upstox data unavailable for {ticker}. Falling back to yfinance.")
 
-        # Default: yfinance
-        df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
-        # flatten multi-index if necessary (happens in newer yfinance)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        
-        df.dropna(inplace=True)
-        return df
+        # Default: yfinance - Using Ticker object for cleaner single-ticker data
+        try:
+            t = yf.Ticker(ticker)
+            df = t.history(period=period, interval=interval, auto_adjust=True)
+            if df.empty:
+                # Fallback to download if history fails
+                df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(-1)
+            
+            df.dropna(inplace=True)
+            # Ensure columns are standard case if yfinance/upstox differ
+            df.columns = [c.capitalize() for c in df.columns]
+            return df
+        except Exception as e:
+            logger.error(f"Failed to fetch data for {ticker}: {e}")
+            return pd.DataFrame()
 
     def compute_indicators(self, df: pd.DataFrame):
         """Compute RSI, EMA, VWAP, MACD, BB, ADX, and Volume Surge."""
         if df.empty or len(df) < 50:
             return None
+
+        # Typical Price for calculations - ensuring we use Series even if columns are slightly mismatched
+        try:
+            high = df['High'].squeeze() if isinstance(df['High'], pd.DataFrame) else df['High']
+            low = df['Low'].squeeze() if isinstance(df['Low'], pd.DataFrame) else df['Low']
+            close = df['Close'].squeeze() if isinstance(df['Close'], pd.DataFrame) else df['Close']
+            df['TP_Internal'] = (high + low + close) / 3
+        except Exception as e:
+            logger.warning(f"Typical Price internal calculation issue: {e}")
+            df['TP_Internal'] = df['Close']
 
         # Short & Medium EMA
         df.ta.ema(length=9, append=True)
@@ -67,17 +86,29 @@ class TechnicalAnalysisService:
         today_df = df[df.index.date == today].copy()
         
         if len(today_df) > 0:
-            today_df['Typical_Price'] = (today_df['High'] + today_df['Low'] + today_df['Close']) / 3
-            today_df['VP'] = today_df['Typical_Price'] * today_df['Volume']
-            vwap = today_df['VP'].cumsum() / today_df['Volume'].cumsum()
-            current_vwap = vwap.iloc[-1]
+            try:
+                high_t = today_df['High'].squeeze() if isinstance(today_df['High'], pd.DataFrame) else today_df['High']
+                low_t = today_df['Low'].squeeze() if isinstance(today_df['Low'], pd.DataFrame) else today_df['Low']
+                close_t = today_df['Close'].squeeze() if isinstance(today_df['Close'], pd.DataFrame) else today_df['Close']
+                vol_t = today_df['Volume'].squeeze() if isinstance(today_df['Volume'], pd.DataFrame) else today_df['Volume']
+                
+                tp = (high_t + low_t + close_t) / 3
+                vp = tp * vol_t
+                vwap = vp.cumsum() / vol_t.cumsum()
+                current_vwap = vwap.iloc[-1]
+            except Exception as e:
+                logger.error(f"VWAP computation error: {e}")
+                current_vwap = df['Close'].iloc[-1]
         else:
-            current_vwap = df['Close'].iloc[-1] # Fallback if today logic fails
-
-        # Calculate volume surge (current bar vol / average of last 20 bars)
+            current_vwap = df['Close'].iloc[-1] 
+        
+        # Volume Surge check
         avg_vol_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
         current_vol = df['Volume'].iloc[-1]
-        vol_surge = current_vol / avg_vol_20 if avg_vol_20 > 0 else 1.0
+        if isinstance(current_vol, pd.Series): current_vol = current_vol.iloc[-1]
+        if isinstance(avg_vol_20, pd.Series): avg_vol_20 = avg_vol_20.iloc[-1]
+        
+        vol_surge = float(current_vol / avg_vol_20) if avg_vol_20 > 0 else 1.0
 
         latest = df.iloc[-1]
 

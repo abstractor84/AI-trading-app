@@ -114,7 +114,15 @@ class VectorizedBacktester:
 
     def _evaluate_metrics(self, trades: list):
         if not trades:
-            return {"trades": 0, "win_rate": 0, "net_profit": 0, "mdd": 0, "params_used": {}}
+            return {
+                "total_trades": 0, 
+                "win_rate": 0, 
+                "net_profit": 0, 
+                "max_drawdown_pct": 0, 
+                "final_equity": self.initial_capital,
+                "trade_log": [],
+                "equity_curve": [self.initial_capital]
+            }
             
         wins = len([t for t in trades if t['pnl_pct'] > 0])
         total_trades = len(trades)

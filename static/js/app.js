@@ -1,785 +1,581 @@
+/**
+ * V2 AI Trading Companion — Frontend
+ * Features: Rich Stock Cards, Chart Viewer, Backtester Lab
+ * Dynamic AI Provider→Model mapping, One-click trade, Enriched scan results
+ */
+
+// ─── WebSocket ──────────────────────────────────────────────────────
 const ws = new WebSocket(`ws://${window.location.host}/ws`);
 
-// DOM Elements
-const globalIndicesEl = document.getElementById('global-indices');
+// ─── AI Provider → Model Mapping ────────────────────────────────────
+const MODEL_MAP = {
+    google: [
+        { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+        { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+        { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    ],
+    groq: [
+        { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B' },
+        { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+        { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B' },
+    ],
+    sambanova: [
+        { value: 'Meta-Llama-3.3-70B-Instruct', label: 'Llama 3.3 70B Instruct' },
+        { value: 'Meta-Llama-3.1-8B-Instruct', label: 'Llama 3.1 8B Instruct' },
+        { value: 'Meta-Llama-3.1-405B-Instruct', label: 'Llama 3.1 405B Instruct' },
+    ],
+};
+
+function updateModelDropdown() {
+    const provider = document.getElementById('ai-provider-input').value;
+    const modelSelect = document.getElementById('ai-model-input');
+    const models = MODEL_MAP[provider] || [];
+    modelSelect.innerHTML = models.map(m =>
+        `<option value="${m.value}">${m.label}</option>`
+    ).join('');
+}
+
+// ─── DOM References ─────────────────────────────────────────────────
+const marketPhaseBadge = document.getElementById('market-phase-badge');
 const vixValEl = document.getElementById('vix-val');
 const istClockEl = document.getElementById('ist-clock');
-const sessionNameEl = document.getElementById('session-name');
 const wsStatusEl = document.getElementById('ws-status');
-const lastUpdatedTimeEl = document.getElementById('last-updated-time');
-const signalCardsContainer = document.getElementById('signal-cards-container');
+const marketPulseEl = document.getElementById('market-pulse');
+const aiCallsBadge = document.getElementById('ai-calls-badge');
+const phaseGuidance = document.getElementById('phase-guidance');
+const aiResultSection = document.getElementById('ai-result-section');
+const aiResultType = document.getElementById('ai-result-type');
+const aiResultTime = document.getElementById('ai-result-time');
+const aiResultBody = document.getElementById('ai-result-body');
+const positionsContainer = document.getElementById('positions-container');
+const totalPnlEl = document.getElementById('total-pnl');
+const timelineContainer = document.getElementById('timeline-container');
+const tradesBody = document.getElementById('trades-body');
 const toastContainer = document.getElementById('toast-container');
 
-// Settings & Panel Elements
-const capitalInput = document.getElementById('capital-input');
-const riskInput = document.getElementById('risk-input');
-const searchEngineInput = document.getElementById('search-engine-input');
-const dataProviderInput = document.getElementById('data-provider-input');
-const saveSettingsBtn = document.getElementById('save-settings-btn');
-const triggerScanBtn = document.getElementById('trigger-scan-btn');
-const magicScanBtn = document.getElementById('magic-scan-btn');
+// ─── App State ──────────────────────────────────────────────────────
+const appState = { openTrades: [], closedTrades: [], globalContext: {}, marketPhase: {}, aiAdvisor: null, actionTimeline: [], chartInstance: null };
 
-// P&L Elements
-const totalPnlEl = document.getElementById('total-pnl');
-const openCountEl = document.getElementById('open-count');
-const closedCountEl = document.getElementById('closed-count');
-const openTradesList = document.getElementById('open-trades-list');
-const closedTradesBody = document.getElementById('closed-trades-body');
+// ─── Init ───────────────────────────────────────────────────────────
+document.getElementById('ai-provider-input').addEventListener('change', updateModelDropdown);
+updateModelDropdown();
 
-// Chart Elements
-const chartModal = document.getElementById('chart-modal');
-const closeChartBtn = document.getElementById('close-chart-btn');
-const chartTitle = document.getElementById('chart-modal-title');
-const chartContainer = document.getElementById('tv-chart-container');
-let tvChart = null;
-let candlestickSeries = null;
-
-let appState = {
-    openTrades: [],
-    closedTrades: [],
-    aiSignals: [],
-    globalContext: {},
-    customStrategies: [],
-    searchEngine: 'gemini',
-    dataProvider: 'yfinance',
-    lastScanType: 'standard',
-    dashboardStocks: new Set()
-};
-
-async function fetchDashboardStocks() {
-    try {
-        const res = await fetch('/api/dashboard/stocks');
-        const data = await res.json();
-        appState.dashboardStocks = new Set(data.map(t => t.replace('.NS', '')));
-    } catch (e) {
-        console.error(e);
-    }
-}
-fetchDashboardStocks();
-
-// Start local clock immediately
+// ─── Clock ──────────────────────────────────────────────────────────
 setInterval(() => {
-    const now = new Date();
-    istClockEl.textContent = now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+    istClockEl.textContent = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
 }, 1000);
 
-ws.onopen = () => {
-    wsStatusEl.classList.add('connected');
-    showToast('Connected to Trading Engine', 'success');
-};
+// ─── Navigation ─────────────────────────────────────────────────────
+const dashboardBtn = document.getElementById('nav-dashboard-btn');
+const backtestBtn = document.getElementById('nav-backtest-btn');
+const pageDashboard = document.getElementById('page-dashboard');
+const pageBacktest = document.getElementById('page-backtest');
 
-ws.onclose = () => {
-    wsStatusEl.classList.remove('connected');
-    showToast('Connection lost! Reconnecting...', 'error');
-    setTimeout(() => window.location.reload(), 5000);
-};
+dashboardBtn.addEventListener('click', () => {
+    dashboardBtn.classList.add('active'); backtestBtn.classList.remove('active');
+    pageDashboard.style.display = ''; pageDashboard.classList.add('active');
+    pageBacktest.style.display = 'none';
+});
+backtestBtn.addEventListener('click', () => {
+    backtestBtn.classList.add('active'); dashboardBtn.classList.remove('active');
+    pageBacktest.style.display = ''; pageDashboard.style.display = 'none';
+    pageDashboard.classList.remove('active');
+});
+
+// ─── WebSocket Handlers ─────────────────────────────────────────────
+ws.onopen = () => { wsStatusEl.className = 'status-indicator connected'; wsStatusEl.title = 'Connected'; };
+ws.onclose = () => { wsStatusEl.className = 'status-indicator disconnected'; setTimeout(() => location.reload(), 3000); };
 
 ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-
-    if (data.type === 'state_update') {
-        appState.capital = data.capital;
-        appState.maxLoss = data.max_loss;
-        if (data.search_engine) appState.searchEngine = data.search_engine;
-        if (data.search_engine && searchEngineInput) searchEngineInput.value = data.search_engine;
-        // Sync fallback checkbox
-        const fbCheckbox = document.getElementById('search-fallback-input');
-        if (fbCheckbox && data.search_fallback !== undefined) fbCheckbox.checked = data.search_fallback;
-        if (data.data_provider) appState.dataProvider = data.data_provider;
-
-        appState.openTrades = data.open_trades;
-        appState.closedTrades = data.closed_trades;
-        appState.aiSignals = data.ai_signals;
-        appState.globalContext = data.global_context;
-
-        capitalInput.value = appState.capital;
-        riskInput.value = appState.maxLoss;
-        if (searchEngineInput) searchEngineInput.value = appState.searchEngine;
-        if (dataProviderInput) dataProviderInput.value = appState.dataProvider;
-
-        renderGlobalContext();
-        renderSignals();
-        renderTrades();
-    }
-    else if (data.type === 'heartbeat') {
-        sessionNameEl.textContent = `Session: ${data.session}`;
-        appState.globalContext = data.global_context;
-        appState.openTrades = data.open_trades;
-        renderGlobalContext();
-        renderTrades(); // Updates live PNL
-    }
-    else if (data.type === 'notification') {
-        showToast(data.message, data.level);
-    }
-    else if (data.type === 'trades_update') {
-        if (data.open_trades) appState.openTrades = data.open_trades;
-        if (data.closed_trades) appState.closedTrades = data.closed_trades;
-        renderTrades();
+    const msg = JSON.parse(event.data);
+    switch (msg.type) {
+        case 'state_update': handleStateUpdate(msg); break;
+        case 'trades_update':
+            appState.openTrades = msg.open_trades || [];
+            appState.closedTrades = msg.closed_trades || [];
+            renderPositions(); renderTradeHistory(); break;
+        case 'ai_advisor_update': handleAIAdvisorUpdate(msg.data); break;
+        case 'scan_results': handleScanResults(msg.data); break;
+        case 'backtest_results': renderBacktestResults(msg.data); break;
+        case 'chart_data': renderChart(msg.data); break;
+        case 'notification': showToast(msg.message, msg.level || 'info'); break;
     }
 };
 
-// UI Triggers
-saveSettingsBtn.addEventListener('click', () => {
-    const fallbackCheckbox = document.getElementById('search-fallback-input');
-    ws.send(JSON.stringify({
-        action: 'update_settings',
-        capital: capitalInput.value,
-        max_loss: riskInput.value,
-        search_engine: searchEngineInput ? searchEngineInput.value : 'gemini',
-        data_provider: dataProviderInput ? dataProviderInput.value : 'yfinance',
-        search_fallback: fallbackCheckbox ? fallbackCheckbox.checked : false
-    }));
-    showToast('Settings Updated', 'success');
+// ─── State Update ───────────────────────────────────────────────────
+function handleStateUpdate(msg) {
+    if (msg.market_phase) { appState.marketPhase = msg.market_phase; updateMarketPhase(msg.market_phase); }
+    if (msg.global_context) { appState.globalContext = msg.global_context; updateMarketPulse(msg.global_context); }
+    appState.openTrades = msg.open_trades || [];
+    appState.closedTrades = msg.closed_trades || [];
+    renderPositions(); renderTradeHistory();
+    if (msg.ai_calls_today !== undefined) aiCallsBadge.textContent = `${msg.ai_calls_today}/${msg.ai_calls_limit || 7} calls`;
+    if (msg.ai_advisor) handleAIAdvisorUpdate(msg.ai_advisor);
+    if (msg.action_timeline) { appState.actionTimeline = msg.action_timeline; renderTimeline(); }
+    if (msg.capital) document.getElementById('capital-input').value = msg.capital;
+    if (msg.max_loss) document.getElementById('risk-input').value = msg.max_loss;
+}
+
+function updateMarketPhase(phase) {
+    marketPhaseBadge.textContent = phase.phase_label || phase.phase;
+    marketPhaseBadge.className = `phase-badge phase-${(phase.phase || '').toLowerCase()}`;
+    phaseGuidance.innerHTML = `<span class="advisor-icon">💡</span><p>${phase.guidance || ''}</p>
+        ${phase.mins_to_close > 0 ? `<span class="time-left">${phase.mins_to_close}m to close</span>` : ''}`;
+}
+
+function updateMarketPulse(ctx) {
+    const india = ctx.india || {};
+    const vix = ctx.vix || {};
+    vixValEl.textContent = vix.value || '--';
+    let html = '';
+    for (const name of ['NIFTY 50', 'SENSEX', 'BANK NIFTY', 'NIFTY IT', 'NIFTY AUTO']) {
+        const d = india[name];
+        if (d) {
+            const cls = d.change_pct >= 0 ? 'positive' : 'negative';
+            html += `<span class="pulse-item ${cls}">${name}: ₹${d.value?.toLocaleString() || 0} (${d.change_pct >= 0 ? '+' : ''}${d.change_pct?.toFixed(2) || 0}%)</span>`;
+        }
+    }
+    marketPulseEl.innerHTML = html || '<span class="pulse-item">Loading...</span>';
+}
+
+// ─── Scan Market ────────────────────────────────────────────────────
+const scanBtn = document.getElementById('scan-now-btn');
+scanBtn.addEventListener('click', () => {
+    scanBtn.disabled = true; scanBtn.innerHTML = '⏳ Scanning...';
+    ws.send(JSON.stringify({ action: 'trigger_scan', strategy: document.querySelector('input[name="strategy"]:checked')?.value || 's1' }));
+    setTimeout(() => { scanBtn.disabled = false; scanBtn.innerHTML = '⚡ Scan Market Now'; }, 60000);
 });
 
-triggerScanBtn.addEventListener('click', () => {
-    triggerScanBtn.disabled = true;
-    triggerScanBtn.innerHTML = '<span class="icon">⌛</span> Scanning NSE...';
-    // Clear old signals
-    document.getElementById('standard-pane').style.display = 'block';
-    document.getElementById('magic-pane').style.display = 'none';
-    appState.lastScanType = 'standard';
-    signalCardsContainer.innerHTML = '<div class="empty-state massive">Scanning NSE universe and analyzing technicals + news using AI...</div>';
-
-    const strategyRadio = document.querySelector('input[name="strategy"]:checked');
-    const strategy = strategyRadio ? strategyRadio.value : 's1';
-    let custom_rules = null;
-    if (strategy.startsWith('cs_') && strategyRadio.getAttribute('data-rules')) {
-        custom_rules = atob(strategyRadio.getAttribute('data-rules'));
-    }
-
-    ws.send(JSON.stringify({ action: 'trigger_scan', strategy, custom_rules }));
-
-    // Re-enable after 30s as fallback
-    setTimeout(() => {
-        triggerScanBtn.disabled = false;
-        triggerScanBtn.innerHTML = '<span class="icon">⚡</span> Standard AI Screen';
-    }, 60000);
-});
-
-magicScanBtn.addEventListener('click', () => {
-    magicScanBtn.disabled = true;
-    magicScanBtn.innerHTML = '<span class="icon">⌛</span> Running Magic Pipeline...';
-
-    document.getElementById('standard-pane').style.display = 'none';
-    document.getElementById('magic-pane').style.display = 'block';
-    appState.lastScanType = 'magic';
-
-    const magicAiCards = document.getElementById('magic-ai-cards');
-    const magicWlCards = document.getElementById('magic-wl-cards');
-    magicAiCards.innerHTML = '<div class="empty-state massive">Vectorizing top 10 stocks. Backtesting 7 strategies. Analyzing news...</div>';
-    magicWlCards.innerHTML = '<div class="empty-state massive">Fetching watchlist technicals...</div>';
-
-    fetchDashboardStocks(); // Refresh WL
-
-    const strategyRadio = document.querySelector('input[name="strategy"]:checked');
-    const strategy = strategyRadio ? strategyRadio.value : 's1';
-    let custom_rules = null;
-    if (strategy.startsWith('cs_') && strategyRadio.getAttribute('data-rules')) {
-        custom_rules = atob(strategyRadio.getAttribute('data-rules'));
-    }
-
-    ws.send(JSON.stringify({ action: 'trigger_scan', strategy, custom_rules }));
-
-    setTimeout(() => {
-        magicScanBtn.disabled = false;
-        magicScanBtn.innerHTML = '<span class="icon">✨</span> Magic AI Recommendations';
-    }, 60000);
-});
-
-// Custom Strategy Logic
-const csModal = document.getElementById('custom-strategy-modal');
-const csNameInput = document.getElementById('cs-name');
-const csRulesInput = document.getElementById('cs-rules');
-const csListContainer = document.getElementById('custom-strategies-list');
-
-function openCustomStrategyModal() {
-    csModal.style.display = 'flex';
+function handleScanResults(data) {
+    scanBtn.disabled = false; scanBtn.innerHTML = '⚡ Scan Market Now';
+    handleAIAdvisorUpdate({ type: 'SCAN', result: data, timestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) });
 }
 
-function closeCustomStrategyModal() {
-    csModal.style.display = 'none';
-    csNameInput.value = '';
-    csRulesInput.value = '';
-}
+// ─── Helpers ────────────────────────────────────────────────────────
+function rsiColor(rsi) { return rsi < 30 ? '#22c55e' : rsi > 70 ? '#ef4444' : rsi < 45 ? '#34d399' : rsi > 55 ? '#f87171' : '#8b949e'; }
+function signalClass(s) { return s.includes('STRONG BUY') ? 'signal-strong-buy' : s.includes('BUY') ? 'signal-buy' : s.includes('STRONG SELL') ? 'signal-strong-sell' : s.includes('SELL') ? 'signal-sell' : 'signal-neutral'; }
+function sentimentClass(label) { return label === 'Bullish' ? 'sentiment-bullish' : label === 'Bearish' ? 'sentiment-bearish' : 'sentiment-neutral'; }
+function fmt(v) { return v !== undefined && v !== null ? Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--'; }
 
-function saveCustomStrategy() {
-    const name = csNameInput.value.trim();
-    const rules = csRulesInput.value.trim();
-    if (!name || !rules) {
-        showToast('Please enter both name and rules', 'error');
-        return;
-    }
+// ─── AI Advisor — Rich Stock Cards ──────────────────────────────────
+function handleAIAdvisorUpdate(data) {
+    if (!data) return;
+    appState.aiAdvisor = data;
+    aiResultSection.style.display = 'block';
+    aiResultType.textContent = `🤖 ${(data.type || '').replace(/_/g, ' ').toUpperCase()}`;
+    aiResultTime.textContent = data.timestamp || '';
+    const result = data.result;
 
-    // Create safe ID
-    const id = 'cs_' + Date.now();
-    appState.customStrategies.push({ id, name, rules });
-
-    renderCustomStrategies();
-    closeCustomStrategyModal();
-    showToast('Custom Strategy Saved!', 'success');
-}
-
-function renderCustomStrategies() {
-    csListContainer.innerHTML = '';
-    appState.customStrategies.forEach(cs => {
-        const label = document.createElement('label');
-        label.className = 'strategy-option custom-algo';
-        label.style.display = 'flex';
-        label.style.justifyContent = 'space-between';
-
-        label.innerHTML = `
-            <div>
-                <input type="radio" name="strategy" value="${cs.id}" data-rules="${btoa(cs.rules)}">
-                <span style="color:#a78bfa;">${cs.name}</span>
-            </div>
-            <button class="nav-btn" style="padding:0; min-height:0; color:var(--color-sell);" onclick="removeCustomStrategy('${cs.id}')">&times;</button>
-        `;
-        csListContainer.appendChild(label);
-    });
-}
-
-function removeCustomStrategy(id) {
-    appState.customStrategies = appState.customStrategies.filter(cs => cs.id !== id);
-    renderCustomStrategies();
-}
-
-// Rendering Functions
-function renderGlobalContext() {
-    if (!appState.globalContext || Object.keys(appState.globalContext).length === 0) return;
-
-    // Helper to generate HTML for a dictionary of tickers
-    const generateTickerHtml = (tickerDict) => {
+    if (Array.isArray(result)) {
+        if (result.length === 0) {
+            aiResultBody.innerHTML = '<div class="ai-empty">No actionable setups found. Being selective avoids bad trades. ✅</div>';
+            return;
+        }
         let html = '';
-        if (!tickerDict) return html;
-        for (const [name, data] of Object.entries(tickerDict)) {
-            const dirClass = data.change >= 0 ? 'up' : 'down';
-            const arrow = data.change >= 0 ? '▲' : '▼';
-            html += `
-                <div class="ticker-item">
-                    <span>${name}</span>
-                    <span class="ticker-val ${dirClass}">${data.value || 0}</span>
-                    <span class="ticker-chg ${dirClass}">${arrow} ${data.change_pct}%</span>
+        result.forEach(r => {
+            const cls = r.action === 'BUY' ? 'buy' : r.action === 'SHORT SELL' ? 'short' : 'neutral';
+            const ticker = (r.ticker || '').replace('.NS', '');
+            const fullTicker = (r.ticker || '').endsWith('.NS') ? r.ticker : `${r.ticker}.NS`;
+            const ta = r.technicals || {};
+            const rl = r.risk_levels || {};
+            const fund = r.fundamentals || {};
+            const sent = r.sentiment || {};
+            const signal = r.signal || 'NEUTRAL';
+            const conf = r.confidence || 0;
+
+            html += `<div class="stock-card ${cls}">
+                <!-- Header: Ticker + Price + Signal + Confidence -->
+                <div class="sc-header">
+                    <div class="sc-title">
+                        <span class="sc-ticker">${ticker}</span>
+                        <span class="badge-${cls}">${r.action || ''}</span>
+                        <span class="sc-signal ${signalClass(signal)}">${signal}</span>
+                    </div>
+                    <div class="sc-price-block">
+                        <span class="sc-live-price">₹${fmt(r.live_price)}</span>
+                        <div class="sc-confidence" title="AI Confidence">
+                            <div class="conf-bar" style="width:${conf}%; background: ${conf > 75 ? '#22c55e' : conf > 50 ? '#fbbf24' : '#ef4444'}"></div>
+                            <span>${conf}%</span>
+                        </div>
+                    </div>
                 </div>
-            `;
+
+                <!-- AI Reasoning -->
+                <div class="sc-reasoning">${r.reasoning || r.reason || ''}</div>
+                ${r.valid_for_minutes ? `<span class="sc-validity">⏱ Valid for ${r.valid_for_minutes} min</span>` : ''}
+
+                <!-- TA Indicators Row -->
+                <div class="sc-ta-row">
+                    <div class="ta-chip" title="RSI (14)">
+                        <span class="ta-label">RSI</span>
+                        <span class="ta-value" style="color:${rsiColor(ta.rsi_14)}">${ta.rsi_14 || '--'}</span>
+                    </div>
+                    <div class="ta-chip" title="MACD Histogram">
+                        <span class="ta-label">MACD</span>
+                        <span class="ta-value" style="color:${(ta.macd_hist || 0) >= 0 ? '#22c55e' : '#ef4444'}">${ta.macd_hist >= 0 ? '+' : ''}${ta.macd_hist || '--'}</span>
+                    </div>
+                    <div class="ta-chip" title="ADX (Trend Strength)">
+                        <span class="ta-label">ADX</span>
+                        <span class="ta-value" style="color:${(ta.adx_14 || 0) > 25 ? '#6366f1' : '#8b949e'}">${ta.adx_14 || '--'}</span>
+                    </div>
+                    <div class="ta-chip" title="Volume Surge">
+                        <span class="ta-label">VOL</span>
+                        <span class="ta-value" style="color:${(ta.vol_surge || 1) > 1.5 ? '#22c55e' : '#8b949e'}">${ta.vol_surge || '--'}x</span>
+                    </div>
+                    <div class="ta-chip" title="VWAP">
+                        <span class="ta-label">VWAP</span>
+                        <span class="ta-value">₹${fmt(ta.vwap)}</span>
+                    </div>
+                    <div class="ta-chip" title="EMA 9/21 Crossover">
+                        <span class="ta-label">EMA</span>
+                        <span class="ta-value" style="color:${(ta.ema_9 || 0) > (ta.ema_21 || 0) ? '#22c55e' : '#ef4444'}">
+                            ${(ta.ema_9 || 0) > (ta.ema_21 || 0) ? '9>21 ▲' : '9<21 ▼'}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Risk Levels Row (computed by Risk Engine, not AI) -->
+                ${Object.keys(rl).length > 0 ? `
+                <div class="sc-levels-row">
+                    <div class="level-chip entry"><span>Entry</span><span>₹${fmt(r.live_price)}</span></div>
+                    <div class="level-chip sl"><span>SL</span><span>₹${fmt(rl.stop_loss)}</span></div>
+                    <div class="level-chip t1"><span>T1</span><span>₹${fmt(rl.target_1)}</span></div>
+                    <div class="level-chip t2"><span>T2</span><span>₹${fmt(rl.target_2)}</span></div>
+                    <div class="level-chip qty"><span>Qty</span><span>${rl.quantity || '--'}</span></div>
+                    <div class="level-chip risk"><span>Risk</span><span>₹${rl.max_loss || '--'}</span></div>
+                </div>` : ''}
+
+                <!-- Fundamentals + Sentiment Row -->
+                <div class="sc-meta-row">
+                    ${fund.sector ? `<span class="meta-tag">📊 ${fund.sector}</span>` : ''}
+                    ${fund.pe_ratio && fund.pe_ratio !== 'N/A' ? `<span class="meta-tag">PE: ${typeof fund.pe_ratio === 'number' ? fund.pe_ratio.toFixed(1) : fund.pe_ratio}</span>` : ''}
+                    ${fund['52_week_high'] && fund['52_week_high'] !== 'N/A' ? `<span class="meta-tag">52H: ₹${fmt(fund['52_week_high'])}</span>` : ''}
+                    ${fund['52_week_low'] && fund['52_week_low'] !== 'N/A' ? `<span class="meta-tag">52L: ₹${fmt(fund['52_week_low'])}</span>` : ''}
+                    <span class="meta-tag ${sentimentClass(sent.label)}">${sent.label === 'Bullish' ? '📈' : sent.label === 'Bearish' ? '📉' : '➖'} ${sent.label || 'Neutral'} (${sent.headline_count || 0} news)</span>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="sc-actions">
+                    <button class="btn pick-log-btn" onclick="quickLogFromScan('${fullTicker}', '${r.action || 'BUY'}')">📝 Log Trade</button>
+                    <button class="btn pick-chart-btn" onclick="openChart('${fullTicker}')">📈 Chart + Projection</button>
+                </div>
+            </div>`;
+        });
+        aiResultBody.innerHTML = html;
+    } else if (result && typeof result === 'object' && !result.error) {
+        // Exit guidance / position review
+        let html = `<div class="ai-exit-guidance">
+            <p><strong>${result.should_close_all ? '🔴 Close All' : '🟢 Selective Hold OK'}</strong></p>
+            <p>${result.reasoning || ''}</p></div>`;
+        if (result.per_position) {
+            result.per_position.forEach(p => {
+                html += `<div class="ai-exit-item"><span>${(p.ticker || '').replace('.NS', '')}</span>
+                    <span class="badge-${p.action === 'CLOSE' ? 'short' : 'buy'}">${p.action}</span>
+                    <span>${p.reason || ''}</span></div>`;
+            });
         }
-        return html;
-    };
-
-    // Render VIX
-    const vixData = appState.globalContext.vix;
-    if (vixData && vixValEl) {
-        vixValEl.innerHTML = `${vixData.value || '--'} <small>(${vixData.change_pct > 0 ? '+' : ''}${vixData.change_pct}%)</small>`;
-        vixValEl.parentElement.style.color = vixData.value > 18 ? 'var(--vix-fear)' : (vixData.value > 14 ? 'var(--vix-elevated)' : 'var(--vix-calm)');
-    }
-
-    // Render Global & India Rows
-    const globalRow = document.querySelector('#row-global .ticker-content');
-    const indiaRow = document.querySelector('#row-india .ticker-content');
-
-    if (globalRow && appState.globalContext.global) {
-        globalRow.innerHTML = generateTickerHtml(appState.globalContext.global);
-    }
-    if (indiaRow && appState.globalContext.india) {
-        indiaRow.innerHTML = generateTickerHtml(appState.globalContext.india);
+        aiResultBody.innerHTML = html;
+    } else if (result && result.error) {
+        aiResultBody.innerHTML = `<div class="ai-error">⚠️ ${result.error}</div>`;
     }
 }
 
-function renderSignals() {
-    if (triggerScanBtn.disabled && appState.aiSignals.length > 0) {
-        triggerScanBtn.disabled = false;
-        triggerScanBtn.innerHTML = '<span class="icon">⚡</span> Run AI Screen';
-        lastUpdatedTimeEl.textContent = `Last Scanned: ${new Date().toLocaleTimeString()}`;
-    }
+// ─── One-Click Trade ────────────────────────────────────────────────
+function quickLogFromScan(ticker, action) {
+    showToast(`Logging ${action} on ${ticker.replace('.NS', '')}...`, 'info');
+    ws.send(JSON.stringify({ action: 'log_trade', ticker, trade_action: action, entry_price: 0 }));
+}
 
-    if (!appState.aiSignals || appState.aiSignals.length === 0) {
-        signalCardsContainer.innerHTML = '<div class="empty-state massive">Click "Run AI Screen" to discover trades.</div>';
+// ─── Positions (with projections, risk advice) ──────────────────────
+function renderPositions() {
+    let totalPnl = 0;
+    if (appState.openTrades.length === 0) {
+        positionsContainer.innerHTML = '<div class="empty-state">No open positions.</div>';
+        totalPnlEl.textContent = '₹0.00'; totalPnlEl.className = 'pnl-badge'; return;
+    }
+    let html = '';
+    appState.openTrades.forEach(t => {
+        const pnl = t.pnl || 0; totalPnl += pnl;
+        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+        const cssClass = t.action === 'SHORT SELL' ? 'short' : 'buy';
+        const advice = t.risk_advice || {};
+        const proj = t.projections || {};
+
+        html += `<div class="position-card ${cssClass}">
+            <div class="pos-header">
+                <div class="pos-title">
+                    <span class="pos-ticker">${t.ticker.replace('.NS', '')}</span>
+                    <span class="badge-${cssClass}">${t.action}</span>
+                    ${advice.advice ? `<span class="advice-badge ${advice.advice.includes('EXIT') ? 'advice-exit' : advice.advice.includes('TRAIL') ? 'advice-trail' : 'advice-hold'}">${advice.advice}</span>` : ''}
+                </div>
+                <span class="pos-pnl ${pnlClass}">${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(2)}</span>
+            </div>
+            <div class="pos-grid">
+                <div class="pos-stat"><label>Entry</label><span>₹${t.entry_price.toFixed(2)}</span></div>
+                <div class="pos-stat"><label>Current</label><span class="${pnlClass}">₹${(t.current_price || t.entry_price).toFixed(2)}</span></div>
+                <div class="pos-stat"><label>SL</label><span class="sl-val">₹${t.stop_loss.toFixed(2)}</span></div>
+                <div class="pos-stat"><label>Trail SL</label><span class="trail-val">₹${(t.trailing_sl || t.stop_loss).toFixed(2)}</span></div>
+                <div class="pos-stat"><label>T1</label><span>₹${t.target_1.toFixed(2)}</span></div>
+                <div class="pos-stat"><label>T2</label><span>₹${t.target_2.toFixed(2)}</span></div>
+                <div class="pos-stat"><label>Qty</label><span>${t.quantity}</span></div>
+                <div class="pos-stat"><label>ATR</label><span>₹${(t.atr || 0).toFixed(2)}</span></div>
+            </div>
+            ${Object.keys(proj).length > 0 ? `
+            <div class="pos-projections">
+                <span class="proj-label">3PM Projections:</span>
+                <span class="proj-chip" title="Ensemble Target">🎯 ₹${proj.ensemble_target || '--'}</span>
+                <span class="proj-chip" title="VWAP Anchor">VWAP ₹${proj.vwap_anchor || '--'}</span>
+                <span class="proj-chip" title="Pivot">Pivot ₹${proj.pivot_point || '--'}</span>
+                <span class="proj-chip" title="Momentum">Mom ₹${proj.momentum_vector || '--'}</span>
+            </div>` : ''}
+            ${advice.reason ? `<div class="pos-advice-reason">${advice.reason}</div>` : ''}
+            <div class="pos-actions">
+                <button class="btn chart-btn" onclick="openChart('${t.ticker}')">📈 Chart</button>
+                <button class="btn close-btn" onclick="closeTrade('${t.id}', ${t.current_price || t.entry_price})">Close Position</button>
+            </div>
+        </div>`;
+    });
+    positionsContainer.innerHTML = html;
+    appState.closedTrades.forEach(t => totalPnl += (t.pnl || 0));
+    totalPnlEl.textContent = `${totalPnl >= 0 ? '+' : ''}₹${totalPnl.toFixed(2)}`;
+    totalPnlEl.className = `pnl-badge ${totalPnl >= 0 ? 'positive' : 'negative'}`;
+}
+
+// ─── Timeline ───────────────────────────────────────────────────────
+function renderTimeline() {
+    if (appState.actionTimeline.length === 0) {
+        timelineContainer.innerHTML = '<div class="empty-state">Events appear here as the day progresses.</div>';
         return;
     }
-
-    const magicAiCards = document.getElementById('magic-ai-cards');
-    const magicWlCards = document.getElementById('magic-wl-cards');
-
-    if (appState.lastScanType === 'standard') {
-        signalCardsContainer.innerHTML = '';
-    } else {
-        magicAiCards.innerHTML = '';
-        magicWlCards.innerHTML = '';
-    }
-
-    let magicAiCount = 0;
-    const template = document.getElementById('signal-card-template');
-
-    appState.aiSignals.forEach(signal => {
-        const ai = signal.ai_recommendation;
-        const ta = signal.ta_data;
-        const clone = template.content.cloneNode(true);
-        const card = clone.querySelector('.signal-card');
-
-        // Header
-        const tickerEl = clone.querySelector('.ticker-name');
-        const cleanTicker = signal.ticker.replace('.NS', '');
-        tickerEl.textContent = cleanTicker;
-
-        // Add chart click listener
-        tickerEl.onclick = () => openChart(cleanTicker);
-
-        const sentBadge = clone.querySelector('.sentiment-badge');
-        sentBadge.textContent = signal.sentiment.sentiment + ' NEWS';
-        sentBadge.classList.add(signal.sentiment.sentiment);
-        sentBadge.title = signal.sentiment.reason;
-
-        // Price & Action
-        const priceEl = clone.querySelector('.current-price');
-        priceEl.textContent = `₹${ta.close.toFixed(2)}`;
-        // Flash animation
-        priceEl.classList.add('flash-update');
-        setTimeout(() => priceEl.classList.remove('flash-update'), 1000);
-
-        const recBadge = clone.querySelector('.recommendation-badge');
-        recBadge.textContent = ai.action;
-        recBadge.classList.add(ai.action.replace(' ', ''));
-
-        // Score
-        const score = ai.ai_composite_score || 0;
-        clone.querySelector('.score-fill').style.width = `${score}%`;
-        clone.querySelector('.score-text').textContent = `AI Confidence: ${score}/100`;
-
-        // Explanation
-        clone.querySelector('.explanation').textContent = ai.explanation || 'No explanation provided.';
-
-        // Trade Levels
-        const entryVal = ai.entry_price ? `₹${ai.entry_price.toFixed(2)}` : '--';
-        const slVal = ai.stop_loss ? `₹${ai.stop_loss.toFixed(2)}` : '--';
-        const t1Val = ai.target_1 ? `₹${ai.target_1.toFixed(2)}` : '--';
-        const t2Val = ai.target_2 ? `₹${ai.target_2.toFixed(2)}` : '--';
-
-        clone.querySelector('.entry-val').textContent = entryVal;
-        clone.querySelector('.sl-val').textContent = slVal;
-        clone.querySelector('.t1-val').textContent = t1Val;
-        clone.querySelector('.t2-val').textContent = t2Val;
-        clone.querySelector('.qty-val').textContent = ai.recommended_quantity || '--';
-
-        // Fundamentals
-        const funContainer = clone.querySelector('.fundamentals');
-        if (signal.fundamentals) {
-            const f = signal.fundamentals;
-            const mktCap = f.market_cap !== 'N/A' && f.market_cap ? '₹' + (f.market_cap / 10000000).toFixed(2) + 'Cr' : 'N/A';
-            const pe = f.pe_ratio !== 'N/A' && f.pe_ratio ? f.pe_ratio.toFixed(1) : 'N/A';
-            const div = f.dividend_yield !== 'N/A' && f.dividend_yield ? (f.dividend_yield * 100).toFixed(1) + '%' : 'N/A';
-
-            funContainer.innerHTML = `
-                <div><span class="text-muted">Mkt Cap:</span> ${mktCap}</div>
-                <div><span class="text-muted">P/E:</span> ${pe}</div>
-                <div style="grid-column: span 2;"><span class="text-muted">Sector:</span> ${f.sector || 'N/A'}</div>
-            `;
-        } else {
-            funContainer.innerHTML = `<div style="grid-column: span 2; text-align: center; color: var(--text-muted);">No fundamentals available</div>`;
-        }
-
-        // TA Chips
-        const chipsContainer = clone.querySelector('.ta-chips');
-        const chips = [
-            { label: 'RSI', val: ta.rsi_14.toFixed(1), state: ta.rsi_14 > 70 ? 'bearish' : (ta.rsi_14 < 30 ? 'bullish' : '') },
-            { label: 'MACD', val: ta.macd.toFixed(2), state: ta.macd > ta.macd_signal ? 'bullish' : 'bearish' },
-            { label: 'VWAP', val: ta.vwap.toFixed(2), state: ta.close > ta.vwap ? 'bullish' : 'bearish' },
-            { label: 'Vol Surge', val: ta.vol_surge + 'x', state: ta.vol_surge > 1.5 ? 'bullish' : '' },
-            { label: 'ADX', val: ta.adx_14.toFixed(1), state: ta.adx_14 > 25 ? 'bullish' : '' } // Strong trend
-        ];
-
-        chips.forEach(c => {
-            chipsContainer.innerHTML += `<span class="chip ${c.state}">${c.label}: ${c.val}</span>`;
-        });
-
-        // Log Trade Button
-        const logBtn = clone.querySelector('.log-trade-btn');
-        if (ai.action === 'BUY' || ai.action === 'SHORT SELL') {
-            logBtn.classList.add('primary');
-            logBtn.onclick = () => {
-                ws.send(JSON.stringify({
-                    action: 'log_trade',
-                    ticker: signal.ticker,
-                    trade_action: ai.action,
-                    qty: ai.recommended_quantity || 1,
-                    entry_price: ta.close, // log current market price as entry for reality
-                    sl: ai.stop_loss,
-                    t1: ai.target_1,
-                    t2: ai.target_2
-                }));
-            };
-        } else {
-            logBtn.style.display = 'none'; // Only allow 1-click log for real signals
-        }
-
-        if (appState.lastScanType === 'standard') {
-            signalCardsContainer.appendChild(clone);
-        } else {
-            // Magic Pane Logic
-            if (appState.dashboardStocks.has(cleanTicker)) {
-                magicWlCards.appendChild(clone);
-            } else if (magicAiCount < 3) {
-                magicAiCards.appendChild(clone);
-                magicAiCount++;
-            }
-        }
+    const iconMap = { 'TRADE_OPEN': '🟢', 'TRADE_CLOSE': '🔴', 'AI_SCAN': '🤖', 'AI_POSITION_REVIEW': '📋', 'AI_EXIT_GUIDANCE': '⚡' };
+    let html = '';
+    [...appState.actionTimeline].reverse().forEach(e => {
+        html += `<div class="timeline-event"><span class="tl-time">${e.time}</span>
+            <span class="tl-icon">${iconMap[e.type] || '📌'}</span><span class="tl-message">${e.message}</span></div>`;
     });
-
-    if (appState.lastScanType === 'magic') {
-        if (magicWlCards.children.length === 0) {
-            magicWlCards.innerHTML = '<div class="text-muted" style="text-align:center; padding: 2rem;">No watchlist stocks found in this scan. Add some from the Watchlists page!</div>';
-        }
-        if (magicAiCards.children.length === 0) {
-            magicAiCards.innerHTML = '<div class="text-muted" style="text-align:center; padding: 2rem;">No top recommendations met the criteria.</div>';
-        }
-    }
+    timelineContainer.innerHTML = html;
 }
 
-function renderTrades() {
-    openCountEl.textContent = appState.openTrades.length;
-    closedCountEl.textContent = appState.closedTrades.length;
-
-    // Calculate total layout PNL
-    let totalPnl = 0;
-
-    // Render Open Trades
-    openTradesList.innerHTML = '';
-    if (appState.openTrades.length === 0) {
-        openTradesList.innerHTML = '<div class="empty-state">No open positions</div>';
-    } else {
-        appState.openTrades.forEach(t => {
-            const pnl = t.pnl || 0;
-            totalPnl += pnl;
-            const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-            const sign = pnl >= 0 ? '+' : '';
-
-            openTradesList.innerHTML += `
-                <div class="open-trade-card ${t.action.replace(' ', '')}">
-                    <div class="ot-header">
-                        <span class="ot-ticker">${t.ticker.replace('.NS', '')} (${t.action})</span>
-                        <span class="ot-pnl ${pnlClass}">${sign}₹${pnl}</span>
-                    </div>
-                    <div class="ot-details">
-                        <span>Entry: ₹${t.entry_price.toFixed(2)}</span>
-                        <span>Current: ₹${(t.current_price || t.entry_price).toFixed(2)}</span>
-                        <span>SL: ₹${t.stop_loss.toFixed(2)}</span>
-                        <span>Qty: ${t.quantity}</span>
-                    </div>
-                    <button class="btn close-btn" onclick="closeTrade('${t.id}', ${t.current_price || t.entry_price})">Close Position</button>
-                </div>
-            `;
-
-            // Intelligent local alerts for SL/Target hits
-            checkTradeAlerts(t);
-        });
-    }
-
-    // Render Closed Trades
-    closedTradesBody.innerHTML = '';
+// ─── Trade History ──────────────────────────────────────────────────
+function renderTradeHistory() {
+    let html = '';
+    appState.openTrades.forEach(t => {
+        const pnl = t.pnl || 0;
+        html += `<tr class="row-open"><td>${t.ticker.replace('.NS', '')}</td><td>${t.action}</td>
+            <td>₹${t.entry_price.toFixed(2)}</td><td><span class="badge-open">OPEN</span></td>
+            <td>${t.quantity}</td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(2)}</td></tr>`;
+    });
     appState.closedTrades.forEach(t => {
         const pnl = t.pnl || 0;
-        totalPnl += pnl;
-        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-        const sign = pnl >= 0 ? '+' : '';
-
-        closedTradesBody.innerHTML += `
-            <tr>
-                <td>${t.ticker.replace('.NS', '')}</td>
-                <td>${t.action}</td>
-                <td>₹${t.entry_price.toFixed(2)}</td>
-                <td>₹${t.exit_price.toFixed(2)}</td>
-                <td>${t.quantity}</td>
-                <td class="ot-pnl ${pnlClass}">${sign}₹${pnl.toFixed(2)}</td>
-            </tr>
-        `;
+        html += `<tr><td>${t.ticker.replace('.NS', '')}</td><td>${t.action}</td>
+            <td>₹${t.entry_price.toFixed(2)}</td><td>₹${(t.exit_price || 0).toFixed(2)}</td>
+            <td>${t.quantity}</td><td class="${pnl >= 0 ? 'positive' : 'negative'}">${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(2)}</td></tr>`;
     });
-
-    // Update Total PNL Header
-    totalPnlEl.textContent = `₹${totalPnl.toFixed(2)}`;
-    totalPnlEl.className = `pnl-huge ${totalPnl >= 0 ? 'positive' : 'negative'}`;
+    tradesBody.innerHTML = html || '<tr><td colspan="6" class="empty-state">No trades yet.</td></tr>';
 }
 
-// Ensure alerts only trigger once per trade per level
-const handledAlerts = new Set();
-
-function checkTradeAlerts(t) {
-    const cp = t.current_price;
-    if (!cp) return;
-
-    if (t.action === 'BUY') {
-        if (cp <= t.stop_loss && !handledAlerts.has(`${t.id}-sl`)) {
-            showToast(`STOP LOSS HIT for ${t.ticker}! Close position.`, 'error');
-            handledAlerts.add(`${t.id}-sl`);
-        } else if (cp >= t.target_1 && !handledAlerts.has(`${t.id}-t1`)) {
-            showToast(`TARGET 1 HIT for ${t.ticker}! Consider trailing SL.`, 'success');
-            handledAlerts.add(`${t.id}-t1`);
-        } else if (cp >= t.target_2 && !handledAlerts.has(`${t.id}-t2`)) {
-            showToast(`TARGET 2 HIT! Full profit target achieved for ${t.ticker}.`, 'success');
-            handledAlerts.add(`${t.id}-t2`);
-        }
-    } else if (t.action === 'SHORT SELL') {
-        if (cp >= t.stop_loss && !handledAlerts.has(`${t.id}-sl`)) {
-            showToast(`STOP LOSS HIT for ${t.ticker}! Close position.`, 'error');
-            handledAlerts.add(`${t.id}-sl`);
-        } else if (cp <= t.target_1 && !handledAlerts.has(`${t.id}-t1`)) {
-            showToast(`TARGET 1 HIT for ${t.ticker}! Consider trailing SL.`, 'success');
-            handledAlerts.add(`${t.id}-t1`);
-        } else if (cp <= t.target_2 && !handledAlerts.has(`${t.id}-t2`)) {
-            showToast(`TARGET 2 HIT! Full profit target achieved for ${t.ticker}.`, 'success');
-            handledAlerts.add(`${t.id}-t2`);
-        }
-    }
+// ─── Close Trade ────────────────────────────────────────────────────
+function closeTrade(tradeId, exitPrice) {
+    if (!confirm(`Close trade at ₹${exitPrice.toFixed(2)}?`)) return;
+    ws.send(JSON.stringify({ action: 'close_trade', trade_id: tradeId, exit_price: exitPrice }));
 }
 
-// Tab Navigation
-const btnDashboard = document.getElementById('nav-dashboard-btn');
-const btnBacktest = document.getElementById('nav-backtest-btn');
-const secDashboard = document.querySelector('main.main-content:not(#backtest-lab-section)');
-const secBacktest = document.getElementById('backtest-lab-section');
-const sidebar = document.querySelector('.sidebar');
-
-if (btnDashboard && btnBacktest) {
-    btnDashboard.onclick = () => {
-        btnDashboard.classList.add('active');
-        btnBacktest.classList.remove('active');
-        secDashboard.style.display = 'block';
-        sidebar.style.display = 'flex';
-        secBacktest.style.display = 'none';
-    };
-    btnBacktest.onclick = () => {
-        btnBacktest.classList.add('active');
-        btnDashboard.classList.remove('active');
-        secDashboard.style.display = 'none';
-        sidebar.style.display = 'none'; // Hide trading sidebar for backtest view
-        secBacktest.style.display = 'block';
-    };
-}
-
-// Backtest Logic
-const runBtBtn = document.getElementById('run-bt-btn');
-const btTickerInput = document.getElementById('bt-ticker-input');
-const btLoading = document.getElementById('bt-loading');
-const btResults = document.getElementById('bt-results-container');
-
-if (runBtBtn) {
-    runBtBtn.onclick = async () => {
-        const ticker = btTickerInput.value.toUpperCase().trim();
-        if (!ticker) return;
-
-        // UI Loading State
-        runBtBtn.disabled = true;
-        btResults.style.display = 'none';
-        btLoading.style.display = 'block';
-
-        try {
-            const resp = await fetch(`/api/backtest/${ticker}`, { method: 'POST' });
-            const data = await resp.json();
-
-            if (data.status === 'success') {
-                const bm = data.results.best_metrics;
-                document.getElementById('bt-trades').textContent = bm.total_trades;
-                document.getElementById('bt-winrate').textContent = bm.win_rate + '%';
-
-                const profEl = document.getElementById('bt-profit');
-                profEl.textContent = '₹' + bm.net_profit;
-                profEl.style.color = bm.net_profit >= 0 ? '#10b981' : '#ef4444';
-
-                document.getElementById('bt-mdd').textContent = bm.max_drawdown_pct + '%';
-
-                document.getElementById('bt-params').textContent = JSON.stringify(data.results.best_parameters, null, 2);
-
-                btResults.style.display = 'block';
-                showToast(`AI successfully optimized ${ticker}`, 'success');
-            } else {
-                showToast(data.error || 'Backtest failed', 'error');
-            }
-        } catch (e) {
-            showToast('Network error during backtest', 'error');
-        } finally {
-            runBtBtn.disabled = false;
-            btLoading.style.display = 'none';
-        }
-    };
-}
-
-// Global scope to be called by onclick string
-window.closeTrade = (id, price) => {
+// ─── Log Trade Form ─────────────────────────────────────────────────
+document.getElementById('qt-submit').addEventListener('click', () => {
+    const ticker = document.getElementById('qt-ticker').value.trim();
+    const action = document.getElementById('qt-action').value;
+    const entry = document.getElementById('qt-entry').value;
+    if (!ticker || !entry) { showToast('Fill in ticker and entry price', 'error'); return; }
+    document.getElementById('qt-feedback').textContent = 'Validating through Risk Engine...';
     ws.send(JSON.stringify({
-        action: 'close_trade',
-        trade_id: id,
-        exit_price: price
+        action: 'log_trade', ticker: ticker.endsWith('.NS') ? ticker : `${ticker}.NS`,
+        trade_action: action, entry_price: parseFloat(entry),
     }));
-};
+    document.getElementById('qt-ticker').value = ''; document.getElementById('qt-entry').value = '';
+    setTimeout(() => { document.getElementById('qt-feedback').textContent = ''; }, 5000);
+});
 
-function showToast(message, type = 'info') {
-    const el = document.createElement('div');
-    el.className = `toast ${type}`;
-    el.textContent = message;
-    toastContainer.appendChild(el);
-    setTimeout(() => {
-        if (el.parentNode) el.parentNode.removeChild(el);
-    }, 5000);
+// ─── Settings ───────────────────────────────────────────────────────
+document.getElementById('save-settings-btn').addEventListener('click', () => {
+    ws.send(JSON.stringify({
+        action: 'update_settings',
+        capital: document.getElementById('capital-input').value,
+        max_loss: document.getElementById('risk-input').value,
+        search_engine: document.getElementById('search-engine-input')?.value || 'ddgs',
+        data_provider: document.getElementById('data-provider-input')?.value || 'yfinance',
+        ai_provider: document.getElementById('ai-provider-input')?.value || 'google',
+        ai_model: document.getElementById('ai-model-input')?.value || 'gemini-2.5-flash',
+        auto_refresh: document.getElementById('auto-refresh-input')?.checked ?? true,
+    }));
+    showToast('Settings saved', 'success');
+});
+
+// ─── Chart Viewer ───────────────────────────────────────────────────
+let chartRefreshTimer = null;
+
+function openChart(ticker) {
+    const modal = document.getElementById('chart-modal');
+    modal.style.display = 'flex';
+    document.getElementById('chart-title').textContent = `📈 ${ticker.replace('.NS', '')} — Intraday + Projection`;
+    document.getElementById('chart-legend').innerHTML = '<div class="empty-state">Loading chart data...</div>';
+    document.getElementById('chart-models-used').textContent = '';
+    document.getElementById('chart-container').innerHTML = '';
+    ws.send(JSON.stringify({ action: 'get_chart_data', ticker }));
+    if (chartRefreshTimer) clearInterval(chartRefreshTimer);
+    chartRefreshTimer = setInterval(() => { ws.send(JSON.stringify({ action: 'get_chart_data', ticker })); }, 60000);
 }
 
-// Chart Logic
-closeChartBtn.onclick = () => {
-    chartModal.style.display = 'none';
-};
+function closeChart() {
+    document.getElementById('chart-modal').style.display = 'none';
+    if (chartRefreshTimer) { clearInterval(chartRefreshTimer); chartRefreshTimer = null; }
+    document.getElementById('chart-container').innerHTML = '';
+    appState.chartInstance = null;
+}
 
-async function openChart(ticker) {
-    chartTitle.textContent = `${ticker} - 5m Real-time Chart`;
-    chartModal.style.display = 'flex';
-
-    // Clear old chart
-    if (tvChart) {
-        tvChart.remove();
-        tvChart = null;
-    }
-
-    // Create new chart
-    tvChart = LightweightCharts.createChart(chartContainer, {
-        layout: {
-            background: { type: 'solid', color: '#181b21' },
-            textColor: '#e2e8f0',
-        },
-        grid: {
-            vertLines: { color: '#334155' },
-            horzLines: { color: '#334155' },
-        },
-        timeScale: {
-            timeVisible: true,
-            secondsVisible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return date.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
-            }
-        },
-        localization: {
-            timeFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return date.toLocaleString('en-IN', {
-                    day: '2-digit', month: 'short',
-                    hour: '2-digit', minute: '2-digit',
-                    hour12: false, timeZone: 'Asia/Kolkata'
-                });
-            }
-        }
+function renderChart(data) {
+    if (data.error) { document.getElementById('chart-legend').innerHTML = `<div class="ai-error">⚠️ ${data.error}</div>`; return; }
+    const container = document.getElementById('chart-container');
+    container.innerHTML = '';
+    const chart = LightweightCharts.createChart(container, {
+        width: container.clientWidth, height: 500,
+        layout: { background: { type: 'solid', color: '#0f1419' }, textColor: '#8b949e', fontSize: 12 },
+        grid: { vertLines: { color: 'rgba(139,148,158,0.06)' }, horzLines: { color: 'rgba(139,148,158,0.06)' } },
+        crosshair: { mode: 0 },
+        rightPriceScale: { borderColor: 'rgba(139,148,158,0.2)' },
+        timeScale: { borderColor: 'rgba(139,148,158,0.2)', timeVisible: true, secondsVisible: false },
     });
+    appState.chartInstance = chart;
+    new ResizeObserver(() => chart.applyOptions({ width: container.clientWidth })).observe(container);
 
-    candlestickSeries = tvChart.addCandlestickSeries({
-        upColor: '#10b981', downColor: '#ef4444',
-        borderVisible: false,
-        wickUpColor: '#10b981', wickDownColor: '#ef4444',
+    // Candlestick series
+    const candleSeries = chart.addCandlestickSeries({
+        upColor: '#22c55e', downColor: '#ef4444', borderDownColor: '#ef4444',
+        borderUpColor: '#22c55e', wickDownColor: '#ef4444', wickUpColor: '#22c55e',
     });
+    const ohlcData = (data.ohlc || []).map(c => ({
+        time: Math.floor(new Date(c.time).getTime() / 1000), open: c.open, high: c.high, low: c.low, close: c.close,
+    }));
+    candleSeries.setData(ohlcData);
 
-    try {
-        const resp = await fetch(`/api/chart/${ticker}`);
-        const result = await resp.json();
-
-        if (result.data) {
-            candlestickSeries.setData(result.data);
-
-            // Handle Indicators dynamically
-            const indicators = {
-                'EMA 9': { data: result.ema9, color: '#3b82f6', series: null },
-                'EMA 21': { data: result.ema21, color: '#f59e0b', series: null },
-                'VWAP': { data: result.vwap, color: '#ec4899', series: null }
-            };
-
-            // Inject toggles into header
-            const header = document.querySelector('.modal-header');
-            let toggleHtml = '<div id="indicator-toggles" style="display:flex; gap:10px; margin-right:auto; margin-left:20px;">';
-            Object.keys(indicators).forEach(key => {
-                toggleHtml += `<button class="btn" id="toggle-${key.replace(' ', '')}" style="padding: 4px 8px; font-size:12px; border:1px solid ${indicators[key].color}; color:${indicators[key].color}; background:transparent;">${key}</button>`;
-            });
-            toggleHtml += '</div>';
-
-            // Remove old toggles if exist
-            const oldIdx = document.getElementById('indicator-toggles');
-            if (oldIdx) oldIdx.remove();
-            chartTitle.insertAdjacentHTML('afterend', toggleHtml);
-
-            Object.keys(indicators).forEach(key => {
-                if (indicators[key].data && indicators[key].data.length > 0) {
-                    const lineSeries = tvChart.addLineSeries({
-                        color: indicators[key].color,
-                        lineWidth: 2,
-                        crosshairMarkerVisible: false,
-                    });
-                    lineSeries.setData(indicators[key].data);
-                    indicators[key].series = lineSeries;
-
-                    // Setup toggle logic
-                    const btn = document.getElementById(`toggle-${key.replace(' ', '')}`);
-                    let isVisible = true;
-                    btn.onclick = () => {
-                        isVisible = !isVisible;
-                        lineSeries.applyOptions({ visible: isVisible });
-                        btn.style.background = isVisible ? 'transparent' : '#334155';
-                    };
-                }
-            });
-
-            tvChart.timeScale().fitContent();
-        } else {
-            showToast('Failed to load chart data', 'error');
-        }
-    } catch (e) {
-        showToast('Error communicating with chart endpoint', 'error');
+    // VWAP line
+    if (data.vwap && ohlcData.length > 0) {
+        const vwapSeries = chart.addLineSeries({ color: 'rgba(255,193,7,0.5)', lineWidth: 1, lineStyle: 2, title: 'VWAP' });
+        vwapSeries.setData([{ time: ohlcData[0].time, value: data.vwap }, { time: ohlcData[ohlcData.length - 1].time, value: data.vwap }]);
     }
+
+    // Projection line + confidence bands
+    if (data.projection && data.timestamps && data.projection.length > 0) {
+        const projSeries = chart.addLineSeries({ color: '#6366f1', lineWidth: 2, lineStyle: 2, title: 'Projection' });
+        const projData = data.timestamps.map((t, i) => ({ time: Math.floor(new Date(t).getTime() / 1000), value: data.projection[i] }));
+        if (ohlcData.length > 0) projData.unshift({ time: ohlcData[ohlcData.length - 1].time, value: ohlcData[ohlcData.length - 1].close });
+        projSeries.setData(projData);
+
+        if (data.upper_band) {
+            const upperSeries = chart.addLineSeries({ color: 'rgba(99,102,241,0.2)', lineWidth: 1, lineStyle: 3 });
+            const upperData = data.timestamps.map((t, i) => ({ time: Math.floor(new Date(t).getTime() / 1000), value: data.upper_band[i] }));
+            if (ohlcData.length > 0) upperData.unshift({ time: ohlcData[ohlcData.length - 1].time, value: ohlcData[ohlcData.length - 1].close });
+            upperSeries.setData(upperData);
+        }
+        if (data.lower_band) {
+            const lowerSeries = chart.addLineSeries({ color: 'rgba(99,102,241,0.2)', lineWidth: 1, lineStyle: 3 });
+            const lowerData = data.timestamps.map((t, i) => ({ time: Math.floor(new Date(t).getTime() / 1000), value: data.lower_band[i] }));
+            if (ohlcData.length > 0) lowerData.unshift({ time: ohlcData[ohlcData.length - 1].time, value: ohlcData[ohlcData.length - 1].close });
+            lowerSeries.setData(lowerData);
+        }
+    }
+    chart.timeScale().fitContent();
+
+    document.getElementById('chart-models-used').textContent = `Models: ${(data.models_used || []).join(' + ')}`;
+    document.getElementById('chart-legend').innerHTML = `<div class="legend-items">
+        <span class="legend-candle">🟩🟥 Candles</span>
+        <span style="color:#6366f1;">━━ Projection</span>
+        <span style="color:rgba(99,102,241,0.4);">┄┄ ±1σ Band</span>
+        <span style="color:#ffc107;">── VWAP ₹${data.vwap || '--'}</span>
+        <span class="legend-price">Current: ₹${data.current_price || '--'}</span>
+    </div>`;
 }
 
-// ─── Upstox Auth Helpers ───────────────────────────────────────────────────
-
-async function checkUpstoxStatus() {
-    const badge = document.getElementById('upstox-status-badge');
-    if (!badge) return;
-    try {
-        const res = await fetch('/api/upstox/status');
-        const data = await res.json();
-        if (data.authenticated) {
-            badge.textContent = '✅ Connected';
-            badge.style.background = '#14532d';
-            badge.style.color = '#4ade80';
-        } else {
-            badge.textContent = '🔴 Not Connected';
-            badge.style.background = '#450a0a';
-            badge.style.color = '#f87171';
+// ─── Backtester ─────────────────────────────────────────────────────
+document.getElementById('run-backtest-btn').addEventListener('click', () => {
+    const btn = document.getElementById('run-backtest-btn');
+    btn.disabled = true; btn.textContent = '⏳ Running...';
+    ws.send(JSON.stringify({
+        action: 'run_backtest', ticker: document.getElementById('bt-ticker').value,
+        days: parseInt(document.getElementById('bt-days').value),
+        capital: parseFloat(document.getElementById('bt-capital').value),
+        params: {
+            ema_fast: parseInt(document.getElementById('bt-ema-fast').value),
+            ema_slow: parseInt(document.getElementById('bt-ema-slow').value),
+            rsi_len: parseInt(document.getElementById('bt-rsi-len').value),
+            rsi_buy_threshold: parseInt(document.getElementById('bt-rsi-buy').value),
+            rsi_short_threshold: parseInt(document.getElementById('bt-rsi-short').value),
+            sl_pct: parseFloat(document.getElementById('bt-sl').value) / 100,
+            tp_pct: parseFloat(document.getElementById('bt-tp').value) / 100,
         }
-    } catch (e) {
-        const b = document.getElementById('upstox-status-badge');
-        if (b) b.textContent = '⚠️ Unreachable';
-    }
-}
+    }));
+    setTimeout(() => { btn.disabled = false; btn.textContent = '🚀 Run Backtest'; }, 15000);
+});
 
-async function connectUpstox() {
-    try {
-        const res = await fetch('/api/upstox/auth-url');
-        const data = await res.json();
-        if (data.auth_url) {
-            window.location.href = data.auth_url;
-        } else {
-            showToast('Could not get Upstox auth URL', 'error');
+document.getElementById('ai-optimize-btn').addEventListener('click', () => {
+    const btn = document.getElementById('ai-optimize-btn');
+    btn.disabled = true; btn.textContent = '✨ Optimizing...';
+    ws.send(JSON.stringify({
+        action: 'ai_optimize', ticker: document.getElementById('bt-ticker').value,
+        days: parseInt(document.getElementById('bt-days').value),
+        capital: parseFloat(document.getElementById('bt-capital').value),
+        params: {
+            ema_fast: parseInt(document.getElementById('bt-ema-fast').value),
+            ema_slow: parseInt(document.getElementById('bt-ema-slow').value),
+            rsi_len: parseInt(document.getElementById('bt-rsi-len').value),
+            rsi_buy_threshold: parseInt(document.getElementById('bt-rsi-buy').value),
+            rsi_short_threshold: parseInt(document.getElementById('bt-rsi-short').value),
+            sl_pct: parseFloat(document.getElementById('bt-sl').value) / 100,
+            tp_pct: parseFloat(document.getElementById('bt-tp').value) / 100,
         }
-    } catch (e) {
-        showToast('Error connecting to Upstox', 'error');
-    }
-}
+    }));
+    setTimeout(() => { btn.disabled = false; btn.textContent = '✨ AI Optimize Parameters'; }, 60000);
+});
 
-// Wire up events — DOM is already ready since this script is at bottom of <body>
-(function initUpstox() {
-    const connectBtn = document.getElementById('upstox-connect-btn');
-    if (connectBtn) {
-        connectBtn.addEventListener('click', connectUpstox);
+function renderBacktestResults(data) {
+    document.getElementById('run-backtest-btn').disabled = false;
+    document.getElementById('run-backtest-btn').textContent = '🚀 Run Backtest';
+    document.getElementById('ai-optimize-btn').disabled = false;
+    document.getElementById('ai-optimize-btn').textContent = '✨ AI Optimize Parameters';
+    const c = document.getElementById('bt-results-container');
+    if (data.error) { c.innerHTML = `<div class="ai-error">⚠️ ${data.error}</div>`; return; }
+    const cls = data.net_profit >= 0 ? 'positive' : 'negative';
+    let html = `<div class="bt-metrics">
+        <div class="bt-metric"><label>Trades</label><span>${data.total_trades}</span></div>
+        <div class="bt-metric"><label>Win Rate</label><span>${data.win_rate}%</span></div>
+        <div class="bt-metric ${cls}"><label>Net Profit</label><span>₹${data.net_profit?.toLocaleString()}</span></div>
+        <div class="bt-metric"><label>Drawdown</label><span>${data.max_drawdown_pct}%</span></div>
+        <div class="bt-metric"><label>Final Equity</label><span>₹${data.final_equity?.toLocaleString()}</span></div>
+    </div>`;
+    if (data.trade_log?.length > 0) {
+        html += `<h3 style="margin:16px 0 8px;font-size:14px;">Trade Log</h3>
+            <table class="trades-table"><thead><tr><th>Type</th><th>Entry</th><th>Exit</th><th>P&L %</th></tr></thead><tbody>`;
+        data.trade_log.slice(0, 20).forEach(t => {
+            html += `<tr><td>${t.type}</td><td>₹${t.entry_price?.toFixed(2)}</td>
+                <td>₹${t.exit_price?.toFixed(2)}</td>
+                <td class="${t.pnl_pct > 0 ? 'positive' : 'negative'}">${(t.pnl_pct * 100).toFixed(2)}%</td></tr>`;
+        });
+        html += '</tbody></table>';
     }
-
-    // Re-check status whenever settings panel is opened
-    const settingsPanel = document.querySelector('details.settings-panel');
-    if (settingsPanel) {
-        settingsPanel.addEventListener('toggle', () => {
-            if (settingsPanel.open) checkUpstoxStatus();
+    if (data.optimization_history) {
+        html += `<h3 style="margin:16px 0 8px;font-size:14px;">🤖 AI Optimization</h3>`;
+        data.optimization_history.forEach((iter, i) => {
+            html += `<div class="bt-iter"><strong>Iter ${i + 1}:</strong> Win ${iter.win_rate}% | ₹${iter.net_profit?.toLocaleString()} | DD ${iter.max_drawdown_pct}%</div>`;
         });
     }
+    c.innerHTML = html;
+}
 
-    // Run an initial status check
-    checkUpstoxStatus();
-})();
+// ─── Toast ──────────────────────────────────────────────────────────
+function showToast(message, level = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${level}`;
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 4000);
+}
