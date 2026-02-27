@@ -86,34 +86,149 @@ backtestBtn.addEventListener('click', () => {
 ws.onopen = () => { wsStatusEl.className = 'status-indicator connected'; wsStatusEl.title = 'Connected'; };
 ws.onclose = () => { wsStatusEl.className = 'status-indicator disconnected'; setTimeout(() => location.reload(), 3000); };
 
-ws.onmessage = (event) => {
+ws.onmessage = (event) => { handleServerMessage(event); };
+
+function handleServerMessage(event) {
     const msg = JSON.parse(event.data);
-    switch (msg.type) {
-        case 'state_update': handleStateUpdate(msg); break;
-        case 'trades_update':
-            appState.openTrades = msg.open_trades || [];
-            appState.closedTrades = msg.closed_trades || [];
-            renderPositions(); renderTradeHistory(); break;
-        case 'ai_advisor_update': handleAIAdvisorUpdate(msg.data); break;
-        case 'scan_results': handleScanResults(msg.data); break;
-        case 'backtest_results': renderBacktestResults(msg.data); break;
-        case 'chart_data': renderChart(msg.data); break;
-        case 'notification': showToast(msg.message, msg.level || 'info'); break;
+
+    if (msg.type === "state_update") {
+        handleStateUpdate(msg);
+    } else if (msg.type === "ai_advisor_update") {
+        appState.aiAdvisor = msg.data;
+        if (appState.aiAdvisor) handleAIAdvisorUpdate(appState.aiAdvisor);
+    } else if (msg.type === "notification") {
+        showToast(msg.message, msg.level || 'info');
+    } else if (msg.type === "connection_status") {
+        updateConnectionStatus(msg.status);
+    } else if (msg.type === "trades_update") {
+        appState.openTrades = msg.open_trades || [];
+        appState.closedTrades = msg.closed_trades || [];
+        renderPositions();
+        updateDaySummary();
+        renderTradeHistory(); // Added this back as it was in original trades_update
+    } else if (msg.type === 'scan_results') {
+        handleScanResults(msg.data);
+    } else if (msg.type === 'backtest_results') {
+        renderBacktestResults(msg.data);
+    } else if (msg.type === 'chart_data') {
+        renderChart(msg.data);
     }
-};
+}
+
+function updateConnectionStatus(status) {
+    const upstoxPill = document.getElementById('upstox-status');
+    const aiPill = document.getElementById('ai-health-status');
+
+    if (status.upstox) {
+        if (status.upstox.connected) {
+            upstoxPill.className = 'health-pill active';
+            upstoxPill.title = `Upstox: Connected as ${status.upstox.user || 'User'}`;
+        } else {
+            upstoxPill.className = 'health-pill disconnected';
+            upstoxPill.title = `Upstox: ${status.upstox.error || 'Disconnected'}`;
+        }
+    }
+
+    if (status.ai) {
+        const remaining = status.ai.remaining;
+        if (remaining > 2) {
+            aiPill.className = 'health-pill active';
+        } else if (remaining > 0) {
+            aiPill.className = 'health-pill warning';
+        } else {
+            aiPill.className = 'health-pill disconnected';
+        }
+        aiPill.title = `AI Quota: ${remaining}/${status.ai.limit} calls left`;
+    }
+}
 
 // ─── State Update ───────────────────────────────────────────────────
 function handleStateUpdate(msg) {
-    if (msg.market_phase) { appState.marketPhase = msg.market_phase; updateMarketPhase(msg.market_phase); }
-    if (msg.global_context) { appState.globalContext = msg.global_context; updateMarketPulse(msg.global_context); }
+    if (msg.market_phase) {
+        appState.marketPhase = msg.market_phase;
+        updateMarketPhase(msg.market_phase);
+    }
+    if (msg.global_context) {
+        appState.globalContext = msg.global_context;
+        updateMarketPulse(msg.global_context);
+    }
+    if (msg.connection_status) {
+        updateConnectionStatus(msg.connection_status);
+    }
     appState.openTrades = msg.open_trades || [];
     appState.closedTrades = msg.closed_trades || [];
-    renderPositions(); renderTradeHistory();
-    if (msg.ai_calls_today !== undefined) aiCallsBadge.textContent = `${msg.ai_calls_today}/${msg.ai_calls_limit || 7} calls`;
-    if (msg.ai_advisor) handleAIAdvisorUpdate(msg.ai_advisor);
+    appState.aiCallsToday = msg.ai_calls_today || 0;
+    appState.aiCallsLimit = msg.ai_calls_limit || 7; // Store limit as well
+    appState.aiAdvisor = msg.ai_advisor;
+
+    renderPositions();
+    if (appState.aiAdvisor) handleAIAdvisorUpdate(appState.aiAdvisor);
+    updateDaySummary();
+    updateAIQuota(appState.aiCallsToday, appState.aiCallsLimit);
+    renderTradeHistory(); // Added this back as it was in original state_update
     if (msg.action_timeline) { appState.actionTimeline = msg.action_timeline; renderTimeline(); }
     if (msg.capital) document.getElementById('capital-input').value = msg.capital;
     if (msg.max_loss) document.getElementById('risk-input').value = msg.max_loss;
+    if (msg.search_engine) document.getElementById('search-engine-input').value = msg.search_engine;
+    if (msg.data_provider) document.getElementById('data-provider-input').value = msg.data_provider;
+    if (msg.ai_provider) {
+        document.getElementById('ai-provider-input').value = msg.ai_provider;
+        // Trigger manually since we changed the provider
+        document.getElementById('ai-provider-input').dispatchEvent(new Event('change'));
+    }
+    if (msg.ai_model) document.getElementById('ai-model-input').value = msg.ai_model;
+    if (msg.auto_refresh !== undefined) document.getElementById('auto-refresh-input').checked = msg.auto_refresh;
+}
+
+function updateAIQuota(used, limit) {
+    aiCallsBadge.textContent = `${used}/${limit} calls`;
+    const fill = document.getElementById('ds-quota-fill');
+    const text = document.getElementById('ds-quota-text');
+    if (fill && text) {
+        const pct = Math.min(100, (used / limit) * 100);
+        fill.style.width = `${pct}%`;
+        fill.style.background = pct > 80 ? '#ef4444' : pct > 50 ? '#fbbf24' : '#3b82f6';
+        text.textContent = `${used}/${limit}`;
+    }
+}
+
+function updateDaySummary(msg) {
+    const closed = appState.closedTrades;
+    const open = appState.openTrades;
+    let totalPnl = 0;
+    let wins = 0, losses = 0;
+
+    closed.forEach(t => {
+        totalPnl += (t.pnl || 0);
+        if ((t.pnl || 0) > 0) wins++; else if ((t.pnl || 0) < 0) losses++;
+    });
+    open.forEach(t => totalPnl += (t.pnl || 0));
+
+    const pnlEl = document.getElementById('ds-pnl');
+    pnlEl.textContent = `₹${totalPnl.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    pnlEl.className = `ds-value ${totalPnl >= 0 ? 'stat-up' : 'stat-down'}`;
+
+    document.getElementById('ds-trades').textContent = closed.length + open.length;
+    document.getElementById('ds-wl').textContent = `${wins} / ${losses}`;
+
+    const wr = closed.length > 0 ? ((wins / closed.length) * 100).toFixed(1) : '--';
+    document.getElementById('ds-winrate').textContent = wr === '--' ? '--' : wr + '%';
+
+    // Estimate EOD Projection if available in open trades
+    let ensembleSum = 0, count = 0;
+    open.forEach(t => {
+        if (t.projections && t.projections.ensemble_target) {
+            ensembleSum += t.projections.ensemble_target;
+            count++;
+        }
+    });
+    const projEl = document.getElementById('ds-eod-proj');
+    if (count > 0) {
+        const avgProj = ensembleSum / count;
+        projEl.textContent = `₹${avgProj.toFixed(2)}`;
+    } else {
+        projEl.textContent = '--';
+    }
 }
 
 function updateMarketPhase(phase) {
@@ -149,6 +264,7 @@ scanBtn.addEventListener('click', () => {
 function handleScanResults(data) {
     scanBtn.disabled = false; scanBtn.innerHTML = '⚡ Scan Market Now';
     handleAIAdvisorUpdate({ type: 'SCAN', result: data, timestamp: new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }) });
+    aiResultSection.scrollIntoView({ behavior: 'smooth' });
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -188,7 +304,6 @@ function handleAIAdvisorUpdate(data) {
                 <div class="sc-header">
                     <div class="sc-title">
                         <span class="sc-ticker">${ticker}</span>
-                        <span class="badge-${cls}">${r.action || ''}</span>
                         <span class="sc-signal ${signalClass(signal)}">${signal}</span>
                     </div>
                     <div class="sc-price-block">
@@ -208,19 +323,19 @@ function handleAIAdvisorUpdate(data) {
                 <div class="sc-ta-row">
                     <div class="ta-chip" title="RSI (14)">
                         <span class="ta-label">RSI</span>
-                        <span class="ta-value" style="color:${rsiColor(ta.rsi_14)}">${ta.rsi_14 || '--'}</span>
+                        <span class="ta-value" style="color:${rsiColor(ta.rsi_14)}">${ta.rsi_14 !== undefined && ta.rsi_14 !== null ? ta.rsi_14 : '--'}</span>
                     </div>
                     <div class="ta-chip" title="MACD Histogram">
                         <span class="ta-label">MACD</span>
-                        <span class="ta-value" style="color:${(ta.macd_hist || 0) >= 0 ? '#22c55e' : '#ef4444'}">${ta.macd_hist >= 0 ? '+' : ''}${ta.macd_hist || '--'}</span>
+                        <span class="ta-value" style="color:${(ta.macd_hist || 0) >= 0 ? '#22c55e' : '#ef4444'}">${ta.macd_hist >= 0 ? '+' : ''}${ta.macd_hist !== undefined && ta.macd_hist !== null ? ta.macd_hist : '--'}</span>
                     </div>
                     <div class="ta-chip" title="ADX (Trend Strength)">
                         <span class="ta-label">ADX</span>
-                        <span class="ta-value" style="color:${(ta.adx_14 || 0) > 25 ? '#6366f1' : '#8b949e'}">${ta.adx_14 || '--'}</span>
+                        <span class="ta-value" style="color:${(ta.adx_14 || 0) > 25 ? '#6366f1' : '#8b949e'}">${ta.adx_14 !== undefined && ta.adx_14 !== null ? ta.adx_14 : '--'}</span>
                     </div>
                     <div class="ta-chip" title="Volume Surge">
                         <span class="ta-label">VOL</span>
-                        <span class="ta-value" style="color:${(ta.vol_surge || 1) > 1.5 ? '#22c55e' : '#8b949e'}">${ta.vol_surge || '--'}x</span>
+                        <span class="ta-value" style="color:${(ta.vol_surge || 1) > 1.5 ? '#22c55e' : '#8b949e'}">${ta.vol_surge !== undefined && ta.vol_surge !== null ? ta.vol_surge : '--'}x</span>
                     </div>
                     <div class="ta-chip" title="VWAP">
                         <span class="ta-label">VWAP</span>
@@ -230,6 +345,12 @@ function handleAIAdvisorUpdate(data) {
                         <span class="ta-label">EMA</span>
                         <span class="ta-value" style="color:${(ta.ema_9 || 0) > (ta.ema_21 || 0) ? '#22c55e' : '#ef4444'}">
                             ${(ta.ema_9 || 0) > (ta.ema_21 || 0) ? '9>21 ▲' : '9<21 ▼'}
+                        </span>
+                    </div>
+                    <div class="ta-chip lorentzian-chip" title="Advanced Lorentzian Classification">
+                        <span class="ta-label">LZ AI</span>
+                        <span class="ta-value" style="color:${(r.lorentzian?.score || 0) > 0.6 ? '#22c55e' : (r.lorentzian?.score || 0) < -0.6 ? '#ef4444' : '#8b949e'}">
+                            ${(r.lorentzian?.signal || 'NEUTRAL')} (${r.lorentzian?.score || 0})
                         </span>
                     </div>
                 </div>
@@ -300,6 +421,7 @@ function renderPositions() {
         const cssClass = t.action === 'SHORT SELL' ? 'short' : 'buy';
         const advice = t.risk_advice || {};
         const proj = t.projections || {};
+        const pnlPct = (t.entry_price > 0 && t.quantity > 0) ? ((pnl / (t.entry_price * t.quantity)) * 100).toFixed(2) : '0.00';
 
         html += `<div class="position-card ${cssClass}">
             <div class="pos-header">
@@ -308,7 +430,10 @@ function renderPositions() {
                     <span class="badge-${cssClass}">${t.action}</span>
                     ${advice.advice ? `<span class="advice-badge ${advice.advice.includes('EXIT') ? 'advice-exit' : advice.advice.includes('TRAIL') ? 'advice-trail' : 'advice-hold'}">${advice.advice}</span>` : ''}
                 </div>
-                <span class="pos-pnl ${pnlClass}">${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(2)}</span>
+                <div class="pos-pnl-group">
+                    <span class="pos-pnl-pct ${pnlClass}">${pnl >= 0 ? '+' : ''}${pnlPct}%</span>
+                    <span class="pos-pnl ${pnlClass}">${pnl >= 0 ? '+' : ''}₹${pnl.toFixed(2)}</span>
+                </div>
             </div>
             <div class="pos-grid">
                 <div class="pos-stat"><label>Entry</label><span>₹${t.entry_price.toFixed(2)}</span></div>

@@ -59,16 +59,21 @@ class AIAdvisorService:
         stock_summaries = []
         for c in candidates[:8]:  # Cap at 8 stocks per batch
             ta = c.get("ta_data", {})
-            stock_summaries.append(
-                f"• {c['ticker']}: Close=₹{ta.get('close', 0):.2f}, "
+            m_prob = float(c.get('math_prob', 0.0))
+            # Basic sanity guard
+            if not ta: continue
+            
+            summary = (
+                f"[{c['ticker']}] - Math Probability: {m_prob:.2f}/1.0\n"
+                f"Price: {ta.get('close', 0):.2f} | VWAP: {ta.get('vwap', 0):.2f}\n"
                 f"RSI={ta.get('rsi_14', 0):.1f}, "
                 f"EMA9={'>' if ta.get('ema_9', 0) > ta.get('ema_21', 0) else '<'}EMA21, "
-                f"VWAP=₹{ta.get('vwap', 0):.2f}, "
                 f"MACD_Hist={ta.get('macd_hist', 0):.2f}, "
                 f"ADX={ta.get('adx_14', 0):.1f}, "
                 f"VolSurge={ta.get('vol_surge', 0):.1f}x, "
                 f"ATR=₹{c.get('atr', 0):.2f}"
             )
+            stock_summaries.append(summary)
 
         stocks_block = "\n".join(stock_summaries)
 
@@ -86,31 +91,31 @@ MARKET CONTEXT:
   Nifty 50: ₹{nifty.get('value', 0)} ({nifty.get('change_pct', 0):+.2f}%)
   India VIX: {vix.get('value', 0)} ({vix.get('change_pct', 0):+.2f}%)
 
-STOCKS WITH REAL-TIME TECHNICALS:
+STOCKS WITH REAL-TIME TECHNICALS (HIGH MATH PROBABILITY HIGHLIGHTED):
 {stocks_block}
 
-TASK: From the stocks above, identify AT MOST 2 stocks that have a HIGH-PROBABILITY intraday setup RIGHT NOW.
+TASK: From the highly-mathematically probable stocks above, identify AT MOST 2 stocks that have the ABSOLUTE BEST PROBABILITY intraday setup RIGHT NOW.
 
-RULES:
-1. SELECTIVITY: If NO stock has a clear setup, return an empty list. It is BETTER to recommend nothing than a losing trade.
-2. DIRECTION: BUY only if price > VWAP and RSI < 70. SHORT only if price < VWAP and RSI > 30.
-3. TREND: ADX must be > 20 for trend trades. Below 20 = range-bound = AVOID unless Mean Reversion.
-4. VOLUME: VolSurge must be > 1.2x for momentum plays.
-5. TIME DECAY: If < 60 min to close, DO NOT recommend new entries.
-6. RISK NOTE: You do NOT set SL or Target — the Risk Engine does that mathematically.
+RULES (BATTLE-HARDENED):
+1. THE MATH MODEL HAS ALREADY VETTED THESE: These stocks arrived to you because a pure mathematical algorithm calculated their Math Probability as > 0.50 based on trend and momentum alignments.
+2. ACTION BIAS: Since the math model already approved these setups, if the Math Probability is >= 0.50 and the trend aligns (EMA9 > EMA21 for BUY, EMA9 < EMA21 for SHORT), you MUST recommend a trade unless there is overwhelming, contradictory evidence (like RSI being catastrophically overextended).
+3. TREND (MANDATORY): BUY only if EMA9 > EMA21. SHORT SELL only if EMA9 < EMA21.
+4. RSI GUARD: No BUY if RSI > 75 (Overbought). No SHORT if RSI < 25 (Oversold).
+5. MOMENTUM: ADX > 20 is preferred for trend-following.
+6. TIME DECAY: If < 60 min to close (14:30 IST), DO NOT recommend new trades.
+7. MATH IS LAW: You simply agree with the direction; the Risk Engine WILL set the precise Stop Loss and Target calculations based on ATR.
 
-OUTPUT: Strictly valid JSON array (no markdown, no explanation outside JSON):
+OUTPUT: Strictly valid JSON array:
 [
   {{
     "ticker": "STOCK.NS",
     "action": "BUY" | "SHORT SELL",
-    "confidence": 60-100,
-    "reasoning": "2-line explanation citing exact TA values",
-    "valid_for_minutes": 15-30
+    "confidence": 70-100, 
+    "reasoning": "[Math Score: X.XX] - Surgical 2-line TA evidence explaining why this trade works.",
+    "valid_for_minutes": 10-15
   }}
 ]
-
-If no good setups exist, return: []
+If NO high-conviction trades exist despite the high math probability, return: []
 """
 
         return self._call_ai(prompt, "SCAN", provider, model_name,
@@ -156,12 +161,12 @@ OPEN POSITIONS:
 
 TASK: For EACH position, provide actionable advice.
 
-RULES:
-1. AGREE with Risk Engine when its math is sound. Only override with strong reasoning.
-2. If P&L is positive AND time < 60 min to close → recommend booking at least 50%.
-3. If a position hit its SL → advise EXIT immediately.
-4. If VIX > 18 and position is in loss → heightened urgency to exit.
-5. Never recommend averaging down (adding to a losing position).
+RULES (CAPITAL PRESERVATION FIRST):
+1. RISK ENGINE IS FINAL: If Risk Engine says 'EXIT', YOU MUST AGREE. Do not hope for a reversal.
+2. PROFIT TAKING: If unrealized P&L > 1% of trade value, recommend BOOKING 50% immediately, regardless of targets.
+3. TIME URGENCY: If < 45 min to close, recommend EXIT for ALL positions unless they are at T2.
+4. VIX SPIKE: If VIX > 22 or has jumped > 5% today, increase urgency to 'HIGH' for all exits.
+5. NEVER AVERAGE DOWN: Under no circumstances suggest adding to a losing position.
 
 OUTPUT: Strictly valid JSON array:
 [
@@ -169,7 +174,7 @@ OUTPUT: Strictly valid JSON array:
     "ticker": "STOCK.NS",
     "action": "HOLD" | "TRAIL SL" | "BOOK 50%" | "EXIT",
     "urgency": "LOW" | "MEDIUM" | "HIGH",
-    "reasoning": "1-2 lines"
+    "reasoning": "Brief technical justification"
   }}
 ]
 """
@@ -248,15 +253,35 @@ OUTPUT: Strictly valid JSON:
                 result = self._call_google(model_name, prompt)
             elif provider == "groq":
                 result = self._call_groq(model_name, prompt)
+            elif provider == "sambanova":
+                result = self._call_sambanova(model_name, prompt)
             else:
                 return {"error": f"Unknown provider: {provider}"}
 
             # Audit log
             self._log_interaction(prompt_type, model_name, input_summary, result)
+            
+            # Update local quota tracker
+            quota_svc.log_usage(model_name)
 
             return result
 
         except Exception as e:
+            if "429" in str(e) and model_name != "gemini-2.5-flash":
+                logger.warning(f"AI Model {model_name} rate limited (429). Falling back to gemini-2.5-flash...")
+                try:
+                    if provider == "google":
+                        result = self._call_google("gemini-2.5-flash", prompt)
+                    elif provider == "sambanova":
+                        result = self._call_sambanova("Meta-Llama-3.1-8B-Instruct", prompt) # Known default for sambanova
+                    else:
+                        result = self._call_groq(model_name, prompt) # Keep groq for now
+                    quota_svc.log_usage("gemini-2.5-flash")
+                    return result
+                except Exception as ef:
+                    logger.error(f"AI Fallback also failed: {ef}")
+                    return {"error": str(ef)}
+            
             logger.error(f"AI call failed ({provider}/{model_name}): {e}")
             return {"error": str(e)}
 
@@ -293,15 +318,62 @@ OUTPUT: Strictly valid JSON:
             return self._parse_json_response(text)
         return {"error": f"Groq returned {resp.status_code}"}
 
+    def _call_sambanova(self, model_name: str, prompt: str) -> dict:
+        """Call SambaNova API."""
+        import requests
+        sambanova_key = os.getenv("SAMBA_API_KEY")
+        if not sambanova_key:
+            return {"error": "SAMBA_API_KEY not set"}
+
+        headers = {
+            "Authorization": f"Bearer {sambanova_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 2000
+        }
+        res = requests.post("https://api.sambanova.ai/v1/chat/completions", headers=headers, json=payload, timeout=30)
+        if res.status_code == 200:
+            text = res.json()["choices"][0]["message"]["content"]
+            result = self._parse_json_response(text)
+            logger.info(f"Parsed AI result: {result}")
+            return result
+        logger.error(f"SambaNova returned {res.status_code}: {res.text}")
+        return {"error": f"SambaNova returned {res.status_code}: {res.text}"}
+
     def _parse_json_response(self, text: str) -> dict:
         """Clean and parse AI JSON response."""
+        logger.info(f"--- RAW AI OUTPUT START ---\n{text}\n--- RAW AI OUTPUT END ---")
+        
         # Strip markdown code fences
         cleaned = text.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
+            if "```json" in cleaned:
+                cleaned = cleaned.split("```json")[1].split("```")[0].strip()
+            else:
+                cleaned = cleaned.split("```")[1].split("```")[0].strip()
+        else:
+            # Fallback for conversational wrappers
+            if "[" in cleaned and "]" in cleaned:
+                start = cleaned.find("[")
+                end = cleaned.rfind("]") + 1
+                try:
+                    js = json.loads(cleaned[start:end])
+                    if isinstance(js, list): return js
+                except Exception:
+                    pass
+                    
+            if "{" in cleaned and "}" in cleaned:
+                start = cleaned.find("{")
+                end = cleaned.rfind("}") + 1
+                try:
+                    js = json.loads(cleaned[start:end])
+                    return js if isinstance(js, (dict, list)) else {"data": js}
+                except Exception:
+                    pass
 
         try:
             parsed = json.loads(cleaned)

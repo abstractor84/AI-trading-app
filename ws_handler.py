@@ -15,49 +15,7 @@ from services.market_phase import market_phase_svc
 logger = logging.getLogger(__name__)
 
 
-def _classify_signal(ta_data: dict) -> str:
-    """Classify TA data into a composite signal: STRONG BUY/BUY/NEUTRAL/SELL/STRONG SELL."""
-    score = 0
-    rsi = ta_data.get("rsi_14", 50)
-    macd_hist = ta_data.get("macd_hist", 0)
-    adx = ta_data.get("adx_14", 0)
-    vol_surge = ta_data.get("vol_surge", 1)
-    ema_9 = ta_data.get("ema_9", 0)
-    ema_21 = ta_data.get("ema_21", 0)
-    close = ta_data.get("close", 0)
-    vwap = ta_data.get("vwap", 0)
 
-    # RSI contribution
-    if rsi < 35: score += 2
-    elif rsi < 45: score += 1
-    elif rsi > 65: score -= 2
-    elif rsi > 55: score -= 1
-
-    # MACD histogram
-    if macd_hist > 1: score += 2
-    elif macd_hist > 0: score += 1
-    elif macd_hist < -1: score -= 2
-    elif macd_hist < 0: score -= 1
-
-    # Trend strength (ADX)
-    if adx > 25: score += 1 if macd_hist > 0 else -1
-
-    # Volume confirmation
-    if vol_surge > 1.5: score += 1 if macd_hist > 0 else -1
-
-    # EMA crossover
-    if ema_9 > ema_21: score += 1
-    elif ema_9 < ema_21: score -= 1
-
-    # VWAP position
-    if close > vwap: score += 1
-    elif close < vwap: score -= 1
-
-    if score >= 4: return "STRONG BUY"
-    if score >= 2: return "BUY"
-    if score <= -4: return "STRONG SELL"
-    if score <= -2: return "SELL"
-    return "NEUTRAL"
 
 
 class ConnectionManager:
@@ -96,6 +54,12 @@ class ConnectionManager:
             "closed_trades": state.closed_trades,
             "global_context": state.global_context,
             "market_phase": phase_ctx,
+            "search_engine": getattr(state, 'search_engine', 'ddgs'),
+            "data_provider": getattr(state, 'data_provider', 'yfinance'),
+            "search_fallback": getattr(state, 'search_fallback', False),
+            "auto_refresh": getattr(state, 'auto_refresh', True),
+            "ai_provider": getattr(state, 'ai_provider', 'google'),
+            "ai_model": getattr(state, 'ai_model', 'gemini-2.5-flash'),
         }
         await websocket.send_json(payload)
 
@@ -133,6 +97,15 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 )
                 await manager.send_state(websocket, state)
 
+            elif action == "get_status":
+                from services.technical_analysis import TechnicalAnalysisService
+                ta_svc = TechnicalAnalysisService()
+                status = ta_svc.get_connection_status()
+                await manager.broadcast({
+                    "type": "connection_status",
+                    "status": status
+                })
+
             elif action == "log_trade":
                 # V2: Validate through Risk Engine before logging
                 from services.technical_analysis import TechnicalAnalysisService
@@ -142,15 +115,21 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 trade_action = command['trade_action']
                 entry_price = float(command.get('entry_price', 0))
 
-                # Fetch live data for ATR
+                # Fetch live data for ATR and Trend verification
                 df = ta_svc.fetch_ohlcv(ticker, period="5d", interval="5m")
                 atr = risk_engine.compute_atr(df) if df is not None and not df.empty else 0
+                ta_data = ta_svc.analyze_stock(ticker) # Get technical indicators
+                vix_value = state.global_context.get("vix", {}).get("value", 0)
 
                 # One-click trade: auto-use live price when entry_price is 0
                 current_price = float(df['Close'].iloc[-1]) if df is not None and not df.empty else 0
                 if entry_price <= 0:
                     entry_price = current_price
-                validation = risk_engine.validate_trade(entry_price, trade_action, atr, current_price)
+                
+                validation = risk_engine.validate_trade(
+                    entry_price, trade_action, atr, current_price, 
+                    ta_data=ta_data, vix_value=vix_value
+                )
 
                 if not validation["passed"]:
                     await manager.broadcast({
@@ -235,6 +214,17 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     news_svc = NewsSentimentService()
                     phase_ctx = market_phase_svc.get_phase_context()
 
+                    provider = getattr(state, 'ai_provider', 'google')
+                    model = getattr(state, 'ai_model', 'gemini-2.5-flash')
+                    search_engine = getattr(state, 'search_engine', 'ddgs')
+                    data_provider = getattr(state, 'data_provider', 'yfinance')
+
+                    logger.info(f"\n=====================================")
+                    logger.info(f"AI Call (Manual Scan): SCAN")
+                    logger.info(f"Data Source: {data_provider} | Search: {search_engine}")
+                    logger.info(f"AI Engine: {provider} | Model: {model}")
+                    logger.info(f"=====================================")
+
                     # Step 1: Get top candidates with TA
                     top_stocks = await asyncio.to_thread(
                         discovery_svc._get_top_candidates, 8
@@ -248,19 +238,32 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                             if ta_data:
                                 df = await asyncio.to_thread(ta_svc.fetch_ohlcv, ticker, "5d", "5m")
                                 atr = risk_engine.compute_atr(df) if df is not None else 0
-                                candidates.append({"ticker": ticker, "ta_data": ta_data, "atr": atr})
+                                
+                                math_prob = ta_svc.evaluate_math_probability(ta_data)
+                                ta_data['math_prob'] = math_prob
+                                
+                                log_msg = f"  [TA] {ticker} | Close: {ta_data.get('close'):.2f} | VWAP: {ta_data.get('vwap'):.2f} | EMA9: {ta_data.get('ema_9'):.2f} | EMA21: {ta_data.get('ema_21'):.2f} | RSI: {ta_data.get('rsi_14'):.2f} | ADX: {ta_data.get('adx_14'):.2f} | Surge: {ta_data.get('vol_surge'):.2f}x"
+                                
                                 ta_cache[ticker] = {"ta_data": ta_data, "atr": atr, "df": df}
+                                
+                                if math_prob >= 0.50:
+                                    candidates.append({"ticker": ticker, "ta_data": ta_data, "atr": atr, "math_prob": math_prob})
+                                    logger.info(log_msg + f" -> [MATH: PASS] (Score: {math_prob})")
+                                else:
+                                    logger.info(log_msg + f" -> [MATH: FAIL] (Score: {math_prob})")
                         except Exception as e:
                             logger.warning(f"Skipping {ticker}: {e}")
 
-                    # Step 2: AI scan
-                    provider = getattr(state, 'ai_provider', 'google')
-                    model = getattr(state, 'ai_model', 'gemini-2.5-flash')
-
-                    ai_picks = await asyncio.to_thread(
-                        ai_advisor.scan_market, candidates,
-                        state.global_context, phase_ctx, provider, model
-                    )
+                    if not candidates:
+                        logger.info("No stocks passed the mathematical setup pre-filter. Skipping AI scan to save API limits.")
+                        ai_picks = []
+                    else:
+                        # Step 2: AI scan
+                        logger.info(f"Passing {len(candidates)} mathematically validated Candidates to AI Scorer...")
+                        ai_picks = await asyncio.to_thread(
+                            ai_advisor.scan_market, candidates,
+                            state.global_context, phase_ctx, provider, model
+                        )
 
                     # Step 3: Enrich each AI pick with full data
                     enriched_picks = []
@@ -271,13 +274,18 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                             ta_data = cached.get("ta_data", {})
                             atr = cached.get("atr", 0)
 
-                            # Risk Engine levels
+                            # Risk Engine levels + Anti-Loss Validation
                             entry_price = ta_data.get("close", 0)
-                            trade_action = pick.get("action", "BUY")
+                            trade_action = pick.get("action", "BUY").upper().strip()
+                            vix_value = state.global_context.get("vix", {}).get("value", 0)
+                            
+                            logger.info(f"DEBUG: Processing {ticker} | Action: {trade_action} | Price: {entry_price}")
+                            
                             risk_levels = {}
                             try:
                                 validation = risk_engine.validate_trade(
-                                    entry_price, trade_action, atr, entry_price
+                                    entry_price, trade_action, atr, entry_price,
+                                    ta_data=ta_data, vix_value=vix_value
                                 )
                                 if validation.get("passed"):
                                     risk_levels = {
@@ -318,27 +326,53 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                                 pass
 
                             # Signal classification from TA
-                            signal = _classify_signal(ta_data)
+                            ta_signal = ta_svc.classify_signal(ta_data)
 
+                            # CONSENSUS CHECK: AI Pick must not contradict TA Signal
+                            trade_action = pick.get("action", "BUY")
+                            if trade_action == "BUY" and ("SELL" in ta_signal):
+                                logger.warning(f"Consensus Check: Blocking AI BUY for {ticker} because TA is {ta_signal}")
+                                continue
+                            if trade_action == "SHORT SELL" and ("BUY" in ta_signal):
+                                logger.warning(f"Consensus Check: Blocking AI SHORT SELL for {ticker} because TA is {ta_signal}")
+                                continue
+
+                            # If consensus passed, merge them into a single definitive signal
+                            # We replace 'action' with the verified version for the UI
+                            final_signal = f"VERIFIED {trade_action}" if ta_signal != "NEUTRAL" else trade_action
+
+                            # Handle NaNs
+                            def _s(val, r=2):
+                                try:
+                                    v = round(val, r)
+                                    import math
+                                    if math.isnan(v): return 0
+                                    return v
+                                except: return 0
+                                
                             enriched_picks.append({
                                 **pick,
-                                "live_price": round(entry_price, 2),
+                                "signal": final_signal,
+                                "live_price": _s(entry_price, 2),
                                 "technicals": {
-                                    "rsi_14": round(ta_data.get("rsi_14", 0), 1),
-                                    "macd_hist": round(ta_data.get("macd_hist", 0), 2),
-                                    "adx_14": round(ta_data.get("adx_14", 0), 1),
-                                    "vwap": round(ta_data.get("vwap", 0), 2),
-                                    "vol_surge": round(ta_data.get("vol_surge", 0), 1),
-                                    "bb_upper": round(ta_data.get("bb_upper", 0), 2),
-                                    "bb_lower": round(ta_data.get("bb_lower", 0), 2),
-                                    "ema_9": round(ta_data.get("ema_9", 0), 2),
-                                    "ema_21": round(ta_data.get("ema_21", 0), 2),
+                                    "rsi_14": _s(ta_data.get("rsi_14", 0), 1),
+                                    "macd_hist": _s(ta_data.get("macd_hist", 0), 2),
+                                    "adx_14": _s(ta_data.get("adx_14", 0), 1),
+                                    "vwap": _s(ta_data.get("vwap", 0), 2),
+                                    "vol_surge": _s(ta_data.get("vol_surge", 0), 2),
+                                    "bb_upper": _s(ta_data.get("bb_upper", 0), 2),
+                                    "bb_lower": _s(ta_data.get("bb_lower", 0), 2),
+                                    "ema_9": _s(ta_data.get("ema_9", 0), 2),
+                                    "ema_21": _s(ta_data.get("ema_21", 0), 2),
+                                },
+                                "lorentzian": {
+                                    "score": _s(cached.get("math_prob", 0), 2),
+                                    "signal": final_signal
                                 },
                                 "risk_levels": risk_levels,
                                 "fundamentals": fundamentals,
                                 "sentiment": sentiment,
-                                "signal": signal,
-                                "atr": round(atr, 2),
+                                "atr": _s(atr, 2),
                             })
 
                     await manager.broadcast({

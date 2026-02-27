@@ -99,3 +99,30 @@ class QuotaService:
             logger.info(f"Logged quota for {model_name}: +1 req, +{tokens} tokens. Day total: {usage.day_requests}")
         finally:
             db.close()
+
+    def get_daily_usage(self, model_name: str) -> int:
+        """Helper for dashboard health status."""
+        db = SessionLocal()
+        try:
+            usage = self._get_usage(db, model_name)
+            return usage.day_requests
+        finally:
+            db.close()
+
+    def get_total_daily_usage(self) -> int:
+        """Helper to sum usage across all models for the dashboard quota tracker."""
+        db = SessionLocal()
+        try:
+            now = datetime.utcnow()
+            # Only sum requests from today
+            usages = db.query(ApiUsage).all()
+            total = 0
+            for u in usages:
+                if now.date() == u.last_request_at.date():
+                    total += u.day_requests
+            return total
+        finally:
+            db.close()
+
+# Module-level singleton
+quota_svc = QuotaService()

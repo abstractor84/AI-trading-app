@@ -91,6 +91,49 @@ class UpstoxService:
             "Authorization": f"Bearer {self.access_token}",
         }
 
+    def validate_token(self) -> bool:
+        """Actively verify if the token is still valid with a lightweight API call."""
+        if not self.access_token:
+            return False
+        url = f"{self.BASE_URL}/user/profile"
+        try:
+            resp = requests.get(url, headers=self._headers(), timeout=5)
+            if resp.status_code == 200:
+                self.is_authenticated = True
+                return True
+            else:
+                logger.error(f"Upstox token validation failed: {resp.status_code} {resp.text}")
+                self.is_authenticated = False
+                return False
+        except Exception as e:
+            logger.error(f"Upstox validation exception: {e}")
+            self.is_authenticated = False
+            return False
+
+    def fetch_profile(self) -> dict | None:
+        """Fetch user profile details to verify connection."""
+        if not self.is_authenticated:
+            return None
+        url = f"{self.BASE_URL}/user/profile"
+        try:
+            resp = requests.get(url, headers=self._headers(), timeout=5)
+            if resp.status_code == 200:
+                return resp.json().get("data")
+        except Exception as e:
+            logger.error(f"Upstox fetch_profile exception: {e}")
+        return None
+
+    def reload_token(self):
+        """Reload token from environment variable and re-validate."""
+        import os
+        self.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
+        self.is_authenticated = False
+        if self.access_token:
+            logger.info("Upstox token reloaded. Validating...")
+            self.validate_token()
+        else:
+            logger.warning("Upstox token reload failed: No token in env.")
+
     # ------------------------------------------------------------------
     # Low-level API helpers
     # ------------------------------------------------------------------

@@ -102,8 +102,8 @@ class RiskEngine:
     # ─── SL / Target / Sizing ───────────────────────────────────────────
 
     def compute_sl_target(self, entry_price: float, action: str, atr: float,
-                          sl_multiplier: float = 1.5, t1_multiplier: float = 1.5,
-                          t2_multiplier: float = 2.5) -> dict:
+                          sl_multiplier: float = 1.5, t1_multiplier: float = 2.0,
+                          t2_multiplier: float = 3.0) -> dict:
         """
         Compute mathematically validated SL and Targets using ATR.
 
@@ -115,6 +115,10 @@ class RiskEngine:
             logger.warning("ATR is zero or negative; cannot compute SL/Target")
             return None
 
+        # Sanitize action
+        action = action.upper().strip()
+        if action in ["SELL", "SHORT"]: action = "SHORT SELL"
+
         atr_sl = atr * sl_multiplier
         atr_t1 = atr * t1_multiplier
         atr_t2 = atr * t2_multiplier
@@ -123,11 +127,16 @@ class RiskEngine:
             sl = entry_price - atr_sl
             t1 = entry_price + atr_t1
             t2 = entry_price + atr_t2
+            # Safety Check: SL must be below Entry
+            if sl > entry_price: sl, t1 = t1, sl # Flip if somehow inverted
         elif action == "SHORT SELL":
             sl = entry_price + atr_sl
             t1 = entry_price - atr_t1
             t2 = entry_price - atr_t2
+            # Safety Check: SL must be above Entry
+            if sl < entry_price: sl, t1 = t1, sl
         else:
+            logger.warning(f"Unsupported action for RiskEngine: {action}")
             return None
 
         return {
@@ -184,46 +193,81 @@ class RiskEngine:
     # ─── Validation Gates ───────────────────────────────────────────────
 
     def validate_trade(self, entry_price: float, action: str, atr: float,
-                       current_price: float = None) -> dict:
+                       current_price: float = None, ta_data: dict = None,
+                       vix_value: float = None) -> dict:
         """
-        Full validation pipeline for a proposed trade.
-        Returns a verdict dict with pass/fail and reasons.
+        Hard-coded 'Anti-Loss' validation pipeline.
+        Multi-layer safety gates that AI CANNOT override.
         """
         reasons = []
         passed = True
 
-        # Gate 1: Daily loss limit
-        if self.daily_pnl <= -self.max_daily_loss:
-            reasons.append(f"BLOCKED: Daily loss limit reached (₹{self.daily_pnl:.0f} / -₹{self.max_daily_loss:.0f})")
+        # Gate 1: Daily loss limit (Circuit Breaker)
+        # Block if daily loss > max_daily_loss or > 2% of capital
+        drawdown_limit = min(self.max_daily_loss, self.capital * 0.02)
+        if self.daily_pnl <= -drawdown_limit:
+            reasons.append(f"🔴 CRITICAL: Daily drawdown limit reached (₹{self.daily_pnl:.0f} / ₹{drawdown_limit:.0f}). Trading halted.")
             passed = False
 
-        # Gate 2: ATR must be meaningful
+        # Gate 2: Volatility Check (VIX Guard)
+        if vix_value and vix_value > 25:
+            reasons.append(f"⚠️ HIGH RISK: India VIX is {vix_value:.1f} (> 25). Market too unstable for safe trading.")
+            passed = False
+
+        # Gate 3: ATR Validity & Relative Volatility
         if atr <= 0:
-            reasons.append("BLOCKED: ATR is zero — insufficient volatility data")
+            reasons.append("❌ FAIL: ATR is zero — insufficient volatility data.")
             passed = False
+        else:
+            atr_pct = (atr / entry_price) * 100
+            if atr_pct > 5.0:
+                reasons.append(f"⚠️ HIGH RISK: Volatility (ATR) is {atr_pct:.1f}% of price. Stock is too 'whippy'.")
+                passed = False
 
-        # Gate 3: Compute and validate SL/Target
+        # Gate 4: Trend Alignment (Math > AI)
+        if ta_data:
+            ema9 = ta_data.get("ema_9")
+            ema21 = ta_data.get("ema_21")
+            if ema9 and ema21:
+                if action == "BUY" and ema9 < ema21:
+                    reasons.append("❌ TREND MISMATCH: Cannot BUY when EMA 9 < EMA 21 (Short-term trend is Down).")
+                    passed = False
+                elif action == "SHORT SELL" and ema9 > ema21:
+                    reasons.append("❌ TREND MISMATCH: Cannot SHORT when EMA 9 > EMA 21 (Short-term trend is Up).")
+                    passed = False
+
+        # Gate 5: Compute and validate SL/Target
         levels = self.compute_sl_target(entry_price, action, atr)
         if levels is None:
-            reasons.append("BLOCKED: Could not compute SL/Target levels")
+            reasons.append("❌ FAIL: Could not compute SL/Target levels.")
             passed = False
-        elif levels["rr_ratio"] < 1.0:
-            reasons.append(f"WARNING: Risk:Reward ratio is {levels['rr_ratio']}:1 (minimum 1:1 required)")
+        elif levels["rr_ratio"] < 1.25: # Raised minimum RR from 1.0 to 1.25
+            reasons.append(f"⚠️ POOR R:R: Risk:Reward ratio is {levels['rr_ratio']}:1 (minimum 1.25:1 required).")
             passed = False
 
-        # Gate 4: Entry price sanity check
+        # Gate 6: Entry price slippage/sanity
         if current_price is not None:
             drift = abs(current_price - entry_price) / entry_price * 100
-            if drift > 1.0:  # More than 1% drift from current price
-                reasons.append(
-                    f"WARNING: Entry ₹{entry_price:.2f} has drifted {drift:.1f}% from "
-                    f"current ₹{current_price:.2f}"
-                )
+            if drift > 0.5:  # Tightened from 1.0% to 0.5%
+                reasons.append(f"⚠️ SLIPPAGE: Entry ₹{entry_price:.2f} has drifted {drift:.2f}% from live ₹{current_price:.2f}.")
+                if drift > 1.0:
+                    passed = False # Hard block on > 1% drift
 
         # Compute position size if passed
         qty = 0
         if passed and levels:
             qty = self.compute_position_size(entry_price, levels["stop_loss"])
+            
+        logger.info(f"== RISK ENGINE EVALUATION ==")
+        logger.info(f"Targeting: {action} @ ₹{entry_price:.2f} | ATR: {atr:.2f}")
+        for res in reasons:
+            logger.info(f"  {res}")
+        if passed:
+            logger.info(f"  ✅ PASSED. Qty: {qty} | Max Risk: ₹{round(qty * levels['risk_per_share'], 2):.2f}")
+            logger.info(f"  SL: ₹{levels['stop_loss']:.2f} | T1: ₹{levels['target_1']:.2f} | T2: ₹{levels['target_2']:.2f}")
+        else:
+            logger.info(f"  ❌ FAILED Validation.")
+        logger.info(f"============================")
 
         return {
             "passed": passed,

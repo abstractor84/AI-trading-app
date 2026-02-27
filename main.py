@@ -60,17 +60,13 @@ app = FastAPI(title="AI Trading Companion V2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# ─── Upstox OAuth Callback ──────────────────────────────────────────
-@app.get("/upstox/callback")
-async def upstox_callback(code: str = Query(None)):
-    """Exchange Upstox auth code for access token and store in .env."""
-    if not code:
-        return HTMLResponse("<h2>❌ No auth code received</h2>", status_code=400)
-
+# ─── Upstox OAuth Helpers ──────────────────────────────────────────
+async def _perform_upstox_exchange(code: str):
+    """Internal helper to exchange code for token and save to .env."""
     import requests as req
     api_key = os.getenv("UPSTOX_API_KEY")
     api_secret = os.getenv("UPSTOX_API_SECRET")
-    redirect_uri = "http://localhost:8000/upstox/callback"
+    redirect_uri = "http://localhost:8000" # Simplified redirect
 
     try:
         resp = req.post("https://api.upstox.com/v2/login/authorization/token", data={
@@ -101,16 +97,17 @@ async def upstox_callback(code: str = Query(None)):
             lines.append(f'UPSTOX_ACCESS_TOKEN="{access_token}"\n')
         with open(env_path, "w") as f:
             f.writelines(lines)
-
-        # Reload env + reinit service
+        
+        # IMPORTANT: Update current process environment so services see it immediately
         os.environ["UPSTOX_ACCESS_TOKEN"] = access_token
-        from services.upstox_service import UpstoxService
-        from services import technical_analysis
-        technical_analysis._upstox_svc = UpstoxService()
+
+        # Reload tokens across services
+        from services.technical_analysis import _upstox_svc
+        _upstox_svc.reload_token()
 
         logger.info("Upstox token refreshed successfully")
         return HTMLResponse(
-            "<h2>✅ Upstox connected!</h2><p>Token saved. You can close this tab.</p>"
+            "<h2>✅ Upstox connected!</h2><p>Token saved. This window will close.</p>"
             "<script>setTimeout(()=>window.close(),2000)</script>"
         )
     except Exception as e:
@@ -118,11 +115,19 @@ async def upstox_callback(code: str = Query(None)):
         return HTMLResponse(f"<h2>❌ Error</h2><pre>{e}</pre>", status_code=500)
 
 
+@app.get("/upstox/callback")
+async def upstox_callback(code: str = Query(None)):
+    """Legacy endpoint for /upstox/callback redirection."""
+    if not code:
+        return HTMLResponse("<h2>❌ No auth code received</h2>", status_code=400)
+    return await _perform_upstox_exchange(code)
+
+
 @app.get("/upstox/connect")
 async def upstox_connect():
-    """Redirect to Upstox login page."""
+    """Redirect to Upstox login page using the registered localhost:8000 URI."""
     api_key = os.getenv("UPSTOX_API_KEY")
-    redirect_uri = "http://localhost:8000/upstox/callback"
+    redirect_uri = "http://localhost:8000"
     url = f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={api_key}&redirect_uri={redirect_uri}"
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=url)
@@ -130,7 +135,10 @@ async def upstox_connect():
 
 # ─── Pages ──────────────────────────────────────────────────────────
 @app.get("/")
-async def root():
+async def root(code: str = Query(None)):
+    """Main dashboard or handle Upstox OAuth redirect at root."""
+    if code:
+        return await _perform_upstox_exchange(code)
     return FileResponse("static/index.html")
 
 

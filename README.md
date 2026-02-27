@@ -1,2 +1,2 @@
-# AI-trading-app
-Made in India AI application for intraday equity trading, tailored for indian market.
+# SuperNova
+AI Trading Companion. Made in India application for intraday equity trading, tailored for the Indian market.

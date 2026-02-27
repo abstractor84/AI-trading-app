@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Trading Companion</title>
+    <title>SuperNova | AI Trading Companion</title>
     <link rel="stylesheet" href="/static/css/style.css?v=12">
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap"
@@ -16,7 +16,9 @@
     <header class="app-header">
         <div class="brand">
             <span class="logo-icon">◈</span>
-            <h1>TradeCompanion <span class="v2-badge">V2</span></h1>
+            <div class="title-group">
+                <h1>SuperNova <span class="v2-badge">AI Trading Companion</span></h1>
+            </div>
         </div>
         <nav class="app-nav">
             <button id="nav-dashboard-btn" class="nav-btn active">📊 Dashboard</button>
@@ -26,7 +28,18 @@
             <div id="market-phase-badge" class="phase-badge">Loading...</div>
             <div class="vix-display">VIX: <span id="vix-val">--</span></div>
             <div id="ist-clock" class="clock">--:--:--</div>
-            <div id="ws-status" class="status-indicator"></div>
+
+            <!-- Connection health indicators -->
+            <div class="health-checks">
+                <div id="upstox-status" class="health-pill disconnected" title="Upstox Status">
+                    <span class="pill-dot">●</span> UPX
+                </div>
+                <div id="ai-health-status" class="health-pill active" title="AI Quota">
+                    <span class="pill-dot">●</span> AI
+                </div>
+            </div>
+
+            <div id="ws-status" class="status-indicator" title="Server Status"></div>
         </div>
     </header>
 
@@ -34,6 +47,37 @@
     <div class="ticker-bar">
         <div id="market-pulse" class="market-ticker">
             <span class="pulse-item">Loading market data...</span>
+        </div>
+    </div>
+
+    <!-- Day Summary Stats -->
+    <div class="day-summary-bar" id="day-summary-bar">
+        <div class="ds-stat">
+            <span class="ds-label">Day P&L</span>
+            <span class="ds-value" id="ds-pnl">₹0.00</span>
+        </div>
+        <div class="ds-stat">
+            <span class="ds-label">Trades</span>
+            <span class="ds-value" id="ds-trades">0</span>
+        </div>
+        <div class="ds-stat">
+            <span class="ds-label">Win / Loss</span>
+            <span class="ds-value" id="ds-wl">0 / 0</span>
+        </div>
+        <div class="ds-stat">
+            <span class="ds-label">Win Rate</span>
+            <span class="ds-value" id="ds-winrate">--</span>
+        </div>
+        <div class="ds-stat">
+            <span class="ds-label">EOD Projection</span>
+            <span class="ds-value" id="ds-eod-proj">--</span>
+        </div>
+        <div class="ds-stat ds-quota">
+            <span class="ds-label">AI Quota</span>
+            <div class="quota-bar">
+                <div class="quota-fill" id="ds-quota-fill"></div>
+            </div>
+            <span class="ds-value ds-quota-text" id="ds-quota-text">0/7</span>
         </div>
     </div>
 
@@ -300,7 +344,7 @@
     <div id="toast-container" class="toast-container"></div>
 
     <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="/static/js/app.js?v=13"></script>
+    <script src="/static/js/app.js?v=15"></script>
 </body>
 
 </html>

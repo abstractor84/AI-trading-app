@@ -4,6 +4,8 @@ import requests
 import io
 import logging
 
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
 logger = logging.getLogger(__name__)
 
 # Hardcoded universe: Nifty 50 + Nifty Next 50 — used as instant fallback
@@ -98,42 +100,21 @@ class StockDiscoveryService:
 
     def discover_nse_universe(self):
         """
-        Try to fetch live Nifty 100 list from Wikipedia.
-        Falls back to the hardcoded _NIFTY100_NS list if the fetch fails or times out.
+        Dynamically fetches the latest NIFTY 200 index constituents directly
+        from the official NSE India CSV.
         """
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-            }
-            url = "https://en.wikipedia.org/wiki/NIFTY_50"
-            resp = requests.get(url, headers=headers, timeout=5)
-            resp.raise_for_status()
-            # Wrap bytes in BytesIO — required by pd.read_html when passing bytes
-            df_list = pd.read_html(io.BytesIO(resp.content))
-            for df in df_list:
-                cols = [str(c).strip().upper() for c in df.columns]
-                if 'SYMBOL' in cols:
-                    sym_col = df.columns[cols.index('SYMBOL')]
-                    syms = [str(s).strip().upper() for s in df[sym_col].tolist()]
-                    self.universe = [f"{s}.NS" for s in syms if s and s != 'NAN']
-                    logger.info(f"Fetched {len(self.universe)} NIFTY 50 symbols from Wikipedia.")
-                    break
-
-            # Try Next 50 as well
-            url_n50 = "https://en.wikipedia.org/wiki/NIFTY_Next_50"
-            resp_n = requests.get(url_n50, headers=headers, timeout=5)
-            df_list_n = pd.read_html(io.BytesIO(resp_n.content))
-            for df in df_list_n:
-                cols = [str(c).strip().upper() for c in df.columns]
-                if 'SYMBOL' in cols:
-                    sym_col = df.columns[cols.index('SYMBOL')]
-                    syms = [str(s).strip().upper() for s in df[sym_col].tolist()]
-                    self.universe.extend([f"{s}.NS" for s in syms if s and s != 'NAN'])
-                    logger.info(f"Extended universe to {len(self.universe)} symbols (incl. Next 50).")
-                    break
-
+            url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
+            df = pd.read_csv(url, timeout=10)
+            if 'Symbol' in df.columns:
+                syms = [str(s).strip().upper() for s in df['Symbol'].tolist()]
+                self.universe = [f"{s}.NS" for s in syms if s and s != 'NAN']
+                logger.info(f"Dynamically fetched {len(self.universe)} NIFTY 200 symbols from official NSE India CSV.")
+            else:
+                raise ValueError("NSE CSV format changed, 'Symbol' column missing")
+                
         except Exception as e:
-            logger.warning(f"Wikipedia universe fetch failed ({e}). Using hardcoded Nifty 100.")
+            logger.warning(f"NSE universe dynamic fetch failed ({e}). Falling back to internal Nifty 100 cache.")
             self.universe = list(_NIFTY100_NS)
 
         return self.universe
@@ -171,7 +152,13 @@ class StockDiscoveryService:
 
             moves.sort(key=lambda x: (abs(x['change_pct']) * x['vol_surge']), reverse=True)
             top_candidates = [m['ticker'] for m in moves[:limit]]
-            logger.info(f"Top {limit} candidates selected from {len(moves)} valid symbols.")
+            
+            logger.info(f"=== STOCK SCANNER PRE-FILTER ===")
+            logger.info(f"Top {limit} candidates selected from {len(moves)} valid symbols based on (Change% * VolSurge).")
+            for i, m in enumerate(moves[:limit]):
+                logger.info(f"  {i+1}. {m['ticker']} | Chg: {m['change_pct']:.2f}% | VolSurge: {m['vol_surge']:.2f}x")
+            logger.info(f"================================")
+            
             return top_candidates
         except Exception as e:
             logger.error(f"Candidate screening error: {e}")
