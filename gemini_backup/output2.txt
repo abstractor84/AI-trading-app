@@ -1,0 +1,3 @@
+Received keys: ['type', 'capital', 'max_loss', 'open_trades', 'closed_trades', 'global_context', 'market_phase', 'search_engine', 'data_provider', 'search_fallback', 'auto_refresh', 'ai_provider', 'ai_model']
+Search engine: tavily
+Data provider: upstox

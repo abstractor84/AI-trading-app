@@ -327,16 +327,145 @@
 
     <!-- Chart Modal -->
     <div id="chart-modal" class="chart-modal" style="display:none;">
-        <div class="chart-modal-content">
+        <div class="chart-modal-content" style="max-width:1200px;">
             <div class="chart-modal-header">
-                <h2 id="chart-title">📈 Chart</h2>
+                <h2 id="chart-title" style="margin:0; font-size:1.4rem;">📈 Chart</h2>
                 <div class="chart-meta">
                     <span id="chart-models-used" class="chart-models"></span>
                     <button id="chart-close-btn" class="btn close-chart-btn" onclick="closeChart()">✕</button>
                 </div>
             </div>
-            <div id="chart-container" style="width:100%;height:500px;"></div>
-            <div id="chart-legend" class="chart-legend"></div>
+
+            <!-- Indicator Control Bar -->
+            <div class="chart-indicator-controls"
+                style="padding:10px 15px; background:var(--bg-card); display:flex; gap:15px; border-bottom:1px solid var(--border-color); align-items:center;">
+                <!-- LZ Toggle -->
+                <div class="indicator-toggle-group" style="display:flex; align-items:center; gap:5px;">
+                    <input type="checkbox" id="toggle-lz" checked onchange="toggleIndicator('lz', this.checked)">
+                    <label for="toggle-lz"
+                        style="margin:0; font-size:0.9rem; font-weight:600; color:var(--text-secondary);">Lorentzian
+                        (LZ)</label>
+                    <button id="gear-lz" onclick="toggleIndicatorSettings('lz')"
+                        style="background:none; border:none; cursor:pointer; font-size:1.1rem; padding:0 5px;"
+                        title="Lorentzian Settings">⚙️</button>
+                </div>
+
+                <!-- ST Toggle -->
+                <div class="indicator-toggle-group" style="display:flex; align-items:center; gap:5px;">
+                    <input type="checkbox" id="toggle-st" checked onchange="toggleIndicator('st', this.checked)">
+                    <label for="toggle-st"
+                        style="margin:0; font-size:0.9rem; font-weight:600; color:var(--text-secondary);">SuperTrend
+                        (ST)</label>
+                    <button id="gear-st" onclick="toggleIndicatorSettings('st')"
+                        style="background:none; border:none; cursor:pointer; font-size:1.1rem; padding:0 5px;"
+                        title="Adaptive SuperTrend Settings">⚙️</button>
+                </div>
+
+                <!-- KNN Toggle -->
+                <div class="indicator-toggle-group" style="display:flex; align-items:center; gap:5px;">
+                    <input type="checkbox" id="toggle-knn" checked onchange="toggleIndicator('knn', this.checked)">
+                    <label for="toggle-knn"
+                        style="margin:0; font-size:0.9rem; font-weight:600; color:var(--text-secondary);">KNN Forecast
+                        Path</label>
+                    <button id="gear-knn" onclick="toggleIndicatorSettings('knn')"
+                        style="background:none; border:none; cursor:pointer; font-size:1.1rem; padding:0 5px;"
+                        title="KNN Forecasting Settings">⚙️</button>
+                </div>
+            </div>
+
+            <div style="position:relative;">
+                <!-- Chart Container (Reduced height to fit ADX) -->
+                <div id="chart-container" style="width:100%;height:450px;"></div>
+
+                <!-- ADX Container -->
+                <div id="adx-container" style="width:100%;height:150px;border-top:1px solid rgba(255,255,255,0.05);">
+                </div>
+
+                <!-- Settings Overlays -->
+
+                <!-- LZ Settings -->
+                <div id="lz-settings" class="indicator-settings-overlay panel"
+                    style="display:none; position:absolute; top:10px; left:15px; z-index:100; width:300px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+                    <h3
+                        style="margin-top:0; font-size:1rem; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                        Lorentzian Config</h3>
+                    <div class="input-group">
+                        <label>Probability Threshold (<span id="lz-threshold-val">0.5</span>)</label>
+                        <input type="range" id="lz-threshold" min="0.1" max="0.9" step="0.05" value="0.5"
+                            oninput="document.getElementById('lz-threshold-val').innerText = this.value">
+                    </div>
+                    <div class="input-group">
+                        <label>Lookback Window</label>
+                        <input type="number" id="lz-lookback" value="2000" min="500" max="5000">
+                    </div>
+                    <div class="input-group">
+                        <label>K-Neighbors</label>
+                        <input type="number" id="lz-k" value="8" min="2" max="20">
+                    </div>
+                    <div class="input-group" style="flex-direction:row; align-items:center;">
+                        <input type="checkbox" id="lz-volatility" checked style="width:auto; margin-right:8px;">
+                        <label for="lz-volatility" style="margin:0;">Use Volatility Filter</label>
+                    </div>
+                    <button class="btn primary" onclick="updateIndicatorParams()"
+                        style="width:100%; margin-top:10px;">Apply</button>
+                </div>
+
+                <!-- ST Settings -->
+                <div id="st-settings" class="indicator-settings-overlay panel"
+                    style="display:none; position:absolute; top:10px; left:180px; z-index:100; width:320px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+                    <h3
+                        style="margin-top:0; font-size:1rem; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                        Adaptive SuperTrend Config</h3>
+                    <div class="settings-grid" style="grid-template-columns: 1fr 1fr;">
+                        <div class="input-group">
+                            <label>ATR Length</label>
+                            <input type="number" id="st-atr-len" value="10" min="5" max="50">
+                        </div>
+                        <div class="input-group">
+                            <label>Base Factor</label>
+                            <input type="number" id="st-factor" value="3.0" step="0.1" min="1.0" max="10.0">
+                        </div>
+                        <div class="input-group">
+                            <label>Train Length</label>
+                            <input type="number" id="st-train-len" value="100" min="50" max="500">
+                        </div>
+                        <div class="input-group">
+                            <label>Volatility P-Low</label>
+                            <input type="number" id="st-p-low" value="0.25" step="0.05" min="0.05" max="0.95">
+                        </div>
+                        <div class="input-group">
+                            <label>Volatility P-Med</label>
+                            <input type="number" id="st-p-med" value="0.50" step="0.05" min="0.05" max="0.95">
+                        </div>
+                        <div class="input-group">
+                            <label>Volatility P-High</label>
+                            <input type="number" id="st-p-high" value="0.75" step="0.05" min="0.05" max="0.95">
+                        </div>
+                    </div>
+                    <button class="btn primary" onclick="updateIndicatorParams()"
+                        style="width:100%; margin-top:10px;">Apply</button>
+                </div>
+
+                <!-- KNN Settings -->
+                <div id="knn-settings" class="indicator-settings-overlay panel"
+                    style="display:none; position:absolute; top:10px; left:350px; z-index:100; width:250px; box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+                    <h3
+                        style="margin-top:0; font-size:1rem; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                        KNN Forecast Config</h3>
+                    <div class="input-group">
+                        <label>K-Neighbors</label>
+                        <input type="number" id="knn-k" value="5" min="2" max="25">
+                    </div>
+                    <div class="input-group">
+                        <label>Sequence Length</label>
+                        <input type="number" id="knn-seq" value="15" min="5" max="50">
+                    </div>
+                    <button class="btn primary" onclick="updateIndicatorParams()"
+                        style="width:100%; margin-top:10px;">Apply</button>
+                </div>
+            </div>
+
+            <div id="chart-legend" class="chart-legend" style="padding:10px 15px;"></div>
         </div>
     </div>
 

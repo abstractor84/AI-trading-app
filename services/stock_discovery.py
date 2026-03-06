@@ -125,30 +125,75 @@ class StockDiscoveryService:
             self.discover_nse_universe()
 
         try:
-            tickers_str = " ".join(self.universe)
-            data = yf.download(tickers_str, period="5d", interval="1d", group_by="ticker", auto_adjust=True, progress=False)
-
+            from services.technical_analysis import _upstox_svc
+            
             moves = []
-            for ticker in self.universe:
-                if ticker in data and len(data[ticker]) >= 2:
-                    df_t = data[ticker]
-                    last_close = df_t['Close'].iloc[-2]
-                    current = df_t['Close'].iloc[-1]
-                    volume = df_t['Volume'].iloc[-1]
-                    avg_volume = df_t['Volume'].mean()
+            if _upstox_svc.is_authenticated:
+                logger.info("Using Upstox for fast stock screening...")
+                # Fetch quotes in batches of 50 (Upstox limit)
+                batch_size = 50
+                for i in range(0, len(self.universe), batch_size):
+                    batch = self.universe[i : i + batch_size]
+                    instrument_keys = []
+                    from services.upstox_service import get_instrument_key
+                    for ticker in batch:
+                        key = get_instrument_key(ticker)
+                        if key: instrument_keys.append(key)
+                    
+                    if not instrument_keys: continue
+                    
+                    # fetch_market_quote returns a dict with all keys
+                    quote_data = _upstox_svc.fetch_market_quote(",".join(instrument_keys))
+                    if quote_data and 'data' in quote_data:
+                        # Build a flat lookup map that handles both separators
+                        q_map = {}
+                        for k, v in quote_data['data'].items():
+                            q_map[k.replace(":", "|")] = v
+                            
+                        for ticker in batch:
+                            key = get_instrument_key(ticker)
+                            q = q_map.get(key)
+                            if q:
+                                ltp = q.get('last_price', 0)
+                                cp = q.get('close', 0)
+                                if cp == 0: continue
+                                change_pct = ((ltp - cp) / cp) * 100
+                                volume = q.get('volume', 0)
+                                # Vol surge is hard to compute without historical avg from quote
+                                # we'll use a neutral 1.0 multiplier or try to find it
+                                moves.append({
+                                    "ticker": ticker,
+                                    "change_pct": change_pct,
+                                    "volume": volume,
+                                    "vol_surge": 1.0
+                                })
+            
+            if not moves:
+                # Fallback to yfinance if Upstox failed or not authenticated
+                logger.info("Using yfinance for stock screening (fallback)...")
+                tickers_str = " ".join(self.universe)
+                data = yf.download(tickers_str, period="5d", interval="1d", group_by="ticker", auto_adjust=True, progress=False)
 
-                    if pd.isna(current) or last_close == 0:
-                        continue
+                for ticker in self.universe:
+                    if ticker in data and len(data[ticker]) >= 2:
+                        df_t = data[ticker]
+                        last_close = df_t['Close'].iloc[-2]
+                        current = df_t['Close'].iloc[-1]
+                        volume = df_t['Volume'].iloc[-1]
+                        avg_volume = df_t['Volume'].mean()
 
-                    change_pct = ((current - last_close) / last_close) * 100
-                    vol_surge = 0 if avg_volume == 0 else (volume / avg_volume)
+                        if pd.isna(current) or last_close == 0:
+                            continue
 
-                    moves.append({
-                        "ticker": ticker,
-                        "change_pct": change_pct,
-                        "volume": volume,
-                        "vol_surge": vol_surge
-                    })
+                        change_pct = ((current - last_close) / last_close) * 100
+                        vol_surge = 0 if avg_volume == 0 else (volume / avg_volume)
+
+                        moves.append({
+                            "ticker": ticker,
+                            "change_pct": change_pct,
+                            "volume": volume,
+                            "vol_surge": vol_surge
+                        })
 
             moves.sort(key=lambda x: (abs(x['change_pct']) * x['vol_surge']), reverse=True)
             top_candidates = [m['ticker'] for m in moves[:limit]]

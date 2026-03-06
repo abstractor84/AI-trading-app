@@ -1,0 +1,15 @@
+2026-03-01 00:42:59,196 - INFO - Starting ML Algorithm CPU Benchmarks...
+2026-03-01 00:42:59,197 - INFO - Simulating scan for 500 stocks...
+2026-03-01 00:43:11,340 - INFO - --- Lorentzian Classifier Benchmark ---
+2026-03-01 00:43:11,340 - INFO - Total Time for 500 stocks: 11.9876 seconds
+2026-03-01 00:43:11,340 - INFO - Avg Time per stock: 23.98 ms
+2026-03-01 00:43:11,340 - INFO - CPU Utilization Diff: 100.00%
+2026-03-01 00:43:54,579 - INFO - --- Adaptive SuperTrend (K-Means) Benchmark ---
+2026-03-01 00:43:54,579 - INFO - Total Time for 500 stocks: 43.2385 seconds
+2026-03-01 00:43:54,579 - INFO - Avg Time per stock: 86.48 ms
+2026-03-01 00:43:54,579 - INFO - CPU Utilization Diff: 535.20%
+2026-03-01 00:43:57,589 - INFO - --- KNN Forecaster Benchmark ---
+2026-03-01 00:43:57,589 - INFO - Total Time for 500 stocks: 3.0093 seconds
+2026-03-01 00:43:57,589 - INFO - Avg Time per stock: 6.02 ms
+2026-03-01 00:43:57,589 - INFO - CPU Utilization Diff: 99.70%
+2026-03-01 00:43:57,589 - INFO - --- Peak Memory Usage: 242.45 MB ---

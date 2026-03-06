@@ -4,6 +4,7 @@ import json
 import requests
 import logging
 import pandas as pd
+import pytz
 from datetime import datetime, timedelta
 from io import BytesIO
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Cache for instrument key lookup: {symbol -> instrument_key}
 _instrument_cache: dict[str, str] = {}
+_reverse_instrument_cache: dict[str, str] = {}
 
 # -----------------------------------------------------------------------------
 # Instrument key resolution
@@ -23,7 +25,7 @@ _instrument_cache: dict[str, str] = {}
 
 def _load_instrument_cache() -> None:
     """Download and cache the NSE instruments JSON from Upstox."""
-    global _instrument_cache
+    global _instrument_cache, _reverse_instrument_cache
     if _instrument_cache:
         return  # already loaded
 
@@ -39,7 +41,13 @@ def _load_instrument_cache() -> None:
             symbol = inst.get("trading_symbol", "")
             key = inst.get("instrument_key", "")
             if symbol and key:
-                _instrument_cache[symbol.upper()] = key
+                symbol_up = symbol.upper()
+                _instrument_cache[symbol_up] = key
+                _reverse_instrument_cache[key] = symbol_up
+                # Also cache variants for robust reverse lookup from quote responses
+                _reverse_instrument_cache[key.replace("|", ":")] = symbol_up
+                _reverse_instrument_cache[f"NSE_EQ:{symbol_up}"] = symbol_up
+                _reverse_instrument_cache[f"NSE_EQ|{symbol_up}"] = symbol_up
 
         logger.info(f"Upstox: Loaded {len(_instrument_cache)} NSE instruments.")
     except Exception as e:
@@ -54,6 +62,15 @@ def get_instrument_key(ticker: str) -> str | None:
     if not key:
         logger.warning(f"Upstox: No instrument key found for '{clean}'.")
     return key
+
+
+def get_symbol_from_key(key: str) -> str | None:
+    """Resolve an Upstox instrument key to a trading symbol. Handles both | and : separators."""
+    _load_instrument_cache()
+    if not key: return None
+    # Standardize to pipe for cache lookup
+    std_key = key.replace(":", "|")
+    return _reverse_instrument_cache.get(std_key)
 
 
 # -----------------------------------------------------------------------------
@@ -142,29 +159,37 @@ class UpstoxService:
         """
         Convert raw Upstox candles to a DataFrame that matches yfinance format.
 
-        Candle format: [Timestamp, Open, High, Low, Close, Volume, OI]
+        Candle format: [Timestamp, Open, High, Low, Close, Volume, Open Interest]
         """
         if not candles:
             return pd.DataFrame()
 
         rows = []
         for c in candles:
-            ts = pd.to_datetime(c[0])
+            if len(c) < 6: continue
             rows.append({
+                "Timestamp": pd.to_datetime(c[0]),
                 "Open":   float(c[1]),
                 "High":   float(c[2]),
                 "Low":    float(c[3]),
                 "Close":  float(c[4]),
                 "Volume": int(c[5]),
             })
-        timestamps = [pd.to_datetime(c[0]) for c in candles]
-        df = pd.DataFrame(rows, index=pd.DatetimeIndex(timestamps))
+        
+        df = pd.DataFrame(rows)
+        if df.empty: return df
+        
+        df.set_index("Timestamp", inplace=True)
         df.index.name = "Datetime"
         df.sort_index(inplace=True)
 
         # Ensure timezone-aware index (IST = UTC+5:30)
+        # Note: .timestamp() is agnostic of timezone (always UTC offset from epoch)
+        # but the way we create the DatetimeIndex matters for pandas_ta
         if df.index.tz is None:
-            df.index = df.index.tz_localize("Asia/Kolkata")
+            df.index = df.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+        else:
+            df.index = df.index.tz_convert("Asia/Kolkata")
 
         return df
 
@@ -261,7 +286,7 @@ class UpstoxService:
         return combined
 
     def fetch_market_quote(self, instrument_key: str) -> dict | None:
-        """Fetch near real-time LTP quote."""
+        """Fetch near real-time LTP quote. Handles symbol-based and ISIN-based key mapping."""
         if not self.is_authenticated:
             return None
         params = {"instrument_key": instrument_key}
@@ -269,7 +294,23 @@ class UpstoxService:
         try:
             resp = requests.get(url, headers=self._headers(), params=params, timeout=5)
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                # Enforce mapping consistency: if we asked for NSE_EQ|ISIN, 
+                # but got NSE_EQ:SYMBOL, we normalize the response keys.
+                if 'data' in data:
+                    normalized_data = {}
+                    for k, v in data['data'].items():
+                        # Map symbol-based key back to ISIN-based key if possible
+                        symbol = k.split(':')[-1]
+                        # Check BOD cache for the ISIN key associated with this symbol
+                        isin_key = _instrument_cache.get(symbol.upper())
+                        if isin_key:
+                            normalized_data[isin_key] = v
+                        # Keep original as well
+                        normalized_data[k] = v
+                        normalized_data[k.replace(":", "|")] = v
+                    data['data'] = normalized_data
+                return data
         except Exception as e:
             logger.error(f"Upstox fetch_market_quote exception: {e}")
         return None

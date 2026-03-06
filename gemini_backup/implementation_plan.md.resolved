@@ -1,0 +1,51 @@
+# Strategic Macro-Audit: 180-Day NSE-500 Backtest
+
+This plan scales the **SuperNova** verification to an industry-standard level: auditing the entire **NSE-500** universe over the last **180 days** (Sept 2025 - Feb 2026), focusing on "Stress Test" event windows.
+
+## High-Fidelity Test Windows
+We will conduct 1-minute resolution "Deep Audits" on the following high-impact periods:
+
+| Window | Event | Rationale |
+| :--- | :--- | :--- |
+| **Dec 5-10, 2025** | **RBI Rate Cut** | Testing sensitivity to monetary policy shifts. |
+| **Jan 1-7, 2026** | **New Year Optimism** | Global market re-opening & capital flows. |
+| **Jan 19-23, 2026** | **Davos & AI Surge** | Sentiment-driven tech rallies. |
+| **Jan 30 - Feb 4, 2026** | **Union Budget 2026** | Peak volatility & fiscal policy shocks. |
+## Tiered Fidelity Model
+To overcome API historical limits while satisfying the "180-day" and ">80% precision" requirements, we will use a **Tiered Fidelity** approach:
+
+| Audit Type | Fidelity | Timeframe | tickers | Goal |
+| :--- | :--- | :--- | :--- | :--- |
+| **Macro Trend** | **1-Hour** | **180 Days** | 10 (Random) | Verify long-term stability & sector performance. |
+| **Stress Test** | **1-Hour** | **Event Days** | 10 (Random) | Audit performance during Budget/RBI/AI surges. |
+| **Sniper Audit** | **1-Minute** | **Last 7 Days** | 10 (Random) | Prove >80% precision for the Lorentzian engine. |
+| **Charting Fix** | **Unix Time** | **Real-time** | Global | Fix time/date mismatch & indicator visibility. |
+
+## Proposed Changes
+
+- Executes the **Consolidated Signal Quality Report** merging macro stability and sniper precision.
+
+### [Phase 7: TradingView Aesthetic Refinement] [DONE]
+#### [UPDATE] [advanced_indicators.py](file:///home/sakthi/Trading/gemini_nse_trader/services/advanced_indicators.py)
+- Refactored [AdaptiveSuperTrend](file:///home/sakthi/Trading/gemini_nse_trader/services/advanced_indicators.py#224-310) for recursive trend-flip stability.
+- Enhanced [LorentzianClassifier](file:///home/sakthi/Trading/gemini_nse_trader/services/advanced_indicators.py#10-223) to return 'Kernel' probability scores for background ribbons.
+- Added parameter support (Sensitivity, Period, Multipliers) for all ML models.
+
+#### [UPDATE] [app.js](file:///home/sakthi/Trading/gemini_nse_trader/static/js/app.js)
+- Implemented single-line multi-color SuperTrend (Green/Red segments).
+- Added `AreaSeries` background ribbons for Lorentzian probability.
+- Integrated indicator configuration UI with WebSocket parameter forwarding.
+
+## Verification Plan
+
+### Automated Tests
+- Run `python scripts/multi_strategy_backtester.py --windows` to audit event days.
+- Run `python scripts/multi_strategy_backtester.py --macro` for the 180-day trend.
+- Verify that **Lorentzian Sniper** maintains >80% precision under high-volatility (Budget Day).
+
+### Manual Verification
+- Review the **6-Month Performance Report** for consistency across Bull/Bear/Chop regimes.
+- Verify sector-specific performance (AI vs Financials) to ensure "Sector Intelligence" is active.
+
+> [!IMPORTANT]
+> This massive simulation will provide the definitive "Ground Truth" for the system's performance, moving beyond single-day snapshots to a robust 6-month resilience audit.

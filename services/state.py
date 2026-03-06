@@ -36,7 +36,7 @@ class AppState:
         self.search_fallback = False
         self.auto_refresh = True
         self.ai_provider = "google"
-        self.ai_model = "gemini-2.5-flash"
+        self.ai_model = "gemini-3.1-pro"
 
         # AI Advisor state (V2)
         self.ai_advisor_message = None  # Current AI guidance
@@ -96,8 +96,8 @@ class AppState:
             "exit_price": trade.exit_price,
             "pnl": trade.pnl,
             "status": trade.status,
-            "timestamp": trade.timestamp.isoformat() if trade.timestamp else None,
-            "close_time": trade.close_time.isoformat() if trade.close_time else None,
+            "timestamp": trade.timestamp.isoformat() + "Z" if trade.timestamp else None,
+            "close_time": trade.close_time.isoformat() + "Z" if trade.close_time else None,
             # V2 fields
             "phase_entered": getattr(trade, 'phase_entered', None),
             "trailing_sl": getattr(trade, 'trailing_sl', None),
@@ -108,10 +108,12 @@ class AppState:
         }
 
     def check_daily_reset(self):
-        """Reset state if it's a new day."""
-        current_date = datetime.now().date()
+        """Reset state if it's a new day in IST."""
+        import pytz
+        ist = pytz.timezone("Asia/Kolkata")
+        current_date = datetime.now(ist).date()
         if current_date > self.last_reset_date:
-            logger.info("Midnight passed, resetting daily trade state...")
+            logger.info("Midnight (IST) passed, resetting daily trade state...")
             self.open_trades.clear()
             self.closed_trades.clear()
             self.standard_ai_signals.clear()
@@ -224,6 +226,19 @@ class AppState:
             if not existing:
                 db.add(DashboardStock(ticker=ticker))
                 db.commit()
+
+    def update_ltp(self, ticker: str, price: float):
+        """Update LTP for an open trade in memory."""
+        for trade in self.open_trades:
+            if trade['ticker'] == ticker:
+                trade['current_price'] = price
+                # Update P&L
+                if trade['action'] == "BUY":
+                    pnl = (price - trade['entry_price']) * trade['quantity']
+                else:
+                    pnl = (trade['entry_price'] - price) * trade['quantity']
+                trade['pnl'] = round(pnl, 2)
+                break
 
     def remove_dashboard_stock(self, ticker: str):
         self.dashboard_watch_stocks.discard(ticker)

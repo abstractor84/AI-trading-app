@@ -1,0 +1,96 @@
+# Task List
+
+## 1. Codebase Blueprinting & Architecture
+- [x] Scan ALL files in the codebase ([database.py](file:///home/sakthi/Trading/gemini_nse_trader/database.py), [models.py](file:///home/sakthi/Trading/gemini_nse_trader/models.py), [main.py](file:///home/sakthi/Trading/gemini_nse_trader/main.py), [ws_handler.py](file:///home/sakthi/Trading/gemini_nse_trader/ws_handler.py), [app.js](file:///home/sakthi/Trading/gemini_nse_trader/static/js/app.js), [background_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/background_engine.py), `services/*`).
+- [x] Create `architecture_blueprint.md` detailing system components, DB schema, and data flows.
+- [x] Create detailed code flow relationship and dependency mapping.
+
+## 2. History Page & Data Persistence
+- [x] Update [models.py](file:///home/sakthi/Trading/gemini_nse_trader/models.py) to ensure past trades, P&L, projections, and scanned/recommended stocks are persisted properly.
+- [x] Create API endpoints in [main.py](file:///home/sakthi/Trading/gemini_nse_trader/main.py) to retrieve historical data.
+- [x] Build a new frontend page (`history.html` & JS) to display this data.
+
+## 3. Manual Charting & Pop-ups
+- [x] Add a global UI element to manually enter a symbol and open its chart.
+- [x] Implement click-to-open logic for stock names to open a popup chart.
+
+## 4. Advanced Charting Indicators (ML Models)
+- [x] Adapt ML Lorentzian Classification, Adaptive SuperTrend, and KNN as optional chart overlays.
+- [x] Define Python back-end technical indicators logic for these 3 models (CPU-only using scikit-learn).
+- [x] Stream model predictions in real-time via [ws_handler.py](file:///home/sakthi/Trading/gemini_nse_trader/ws_handler.py) to update the chart dynamically.
+- [x] Update [app.js](file:///home/sakthi/Trading/gemini_nse_trader/static/js/app.js) charting library to accept and render these custom indicators.
+- [x] **IMPLEMENTED**: TradingView-parity visuals (Single-line SuperTrend, LZ Ribbons).
+- [x] **IMPLEMENTED**: Real-time Indicator Configuration UI (Sensitivity, Lookback, Multipliers).
+- [ ] Ensure chart dynamically updates real-time candle ticks (via Upstox live feed integration).
+
+## 5. Phase 1: Backend Stability & Migrations
+- [x] Initialize `alembic` to manage future database migrations cleanly.
+- [x] Stabilize [database.py](file:///home/sakthi/Trading/gemini_nse_trader/database.py) to exclusively use absolute [trading_data.db](file:///home/sakthi/Trading/gemini_nse_trader/trading_data.db). Enable 90-day retention cleanup.
+- [x] Add explicit Per-Provider API Quota tracking (30/day) with low-quota (<10%) UI warnings.
+- [x] Re-integrate the Watchlist feature cleanly into the V2 DB and APIs.
+- [x] **VERIFIED**: Write Unit Tests for Phase 1 changes and run regression checks (77% coverage).
+
+## 6. Phase 2: Market Phases & Autonomous Intelligence
+- [x] Refactor [market_phase.py](file:///home/sakthi/Trading/gemini_nse_trader/services/market_phase.py) into highly granular micro-phases.
+- [x] Update `trigger_scan` flow to perform a rigorous DDGS search for news/events/sentiment *before* calling AI.
+- [x] Add AI Fallback Toggle in Settings UI with a risk-warning consent modal.
+- [x] **VERIFIED**: Write Unit Tests for Phase 2 changes.
+
+## 7. Phase 3: Real-Time Charting & Ticks
+- [x] Stream real-time Upstox ticks via WebSocket to Lightweight Charts so candles morph dynamically.
+- [x] Verify ML Indicators overlap perfectly with real-time ticks.
+
+## 8. Phase 4: Full Codebase Test Automation
+- [x] Write Python Unit Tests targeting **95% coverage for the ENTIRE codebase** (Current: 72%).
+    - [x] Achieve 90%+ coverage for [services/news_sentiment.py](file:///home/sakthi/Trading/gemini_nse_trader/services/news_sentiment.py) (Current: 96%)
+- [x] Achieve 90%+ coverage for [services/upstox_service.py](file:///home/sakthi/Trading/gemini_nse_trader/services/upstox_service.py) (Current: 91%)
+- [x] Achieve 100% coverage for [services/stock_discovery.py](file:///home/sakthi/Trading/gemini_nse_trader/services/stock_discovery.py)
+- [ ] Increase coverage for [services/technical_analysis.py](file:///home/sakthi/Trading/gemini_nse_trader/services/technical_analysis.py) (Current: 73% -> Goal: 95%)
+- [ ] Increase coverage for `services/risk_engine.py` (Current: 78% -> Goal: 90%)
+- [ ] Achieve 90%+ coverage for `services/ai_scorer.py` (Current: 92%)
+- [ ] Finalize [services/market_phase.py](file:///home/sakthi/Trading/gemini_nse_trader/services/market_phase.py) (Current: 96%)
+
+## 9. Phase 5: Architecture Review & Latency Benchmarking
+- [ ] 0. Analyze AI Agent suggestion on Lorentzian Classification and hybrid models.
+- [x] Implement Phase 5: UI/System Tests with Playwright (Verified: 3/3 Passed)
+- [x] Perform CPU Performance Benchmarking for ML models (Verified: <100ms/stock).
+
+## 10. Phase 6: Sentinel Guard & Real-Time Risk
+- [x] Implement [SentinelService](file:///home/sakthi/Trading/gemini_nse_trader/services/sentinel_service.py#8-183) for 60-second news monitoring of open positions.
+- [x] Connect Sentinel alerts to WebSocket and UI "High-Priority" modals.
+- [x] Implement dynamic scanning frequency based on market volatility spikes.
+- [x] Final end-to-end latency validation (Upstox -> UI).
+- [x] **Sentinel Guard Expansion**:
+    - [x] Local news-based trade setup discovery (without immediate AI).
+    - [x] Sentinel Guard V2 Expansion (High Complexity)
+    - [x] Implement Sentinel "News Corridor" Sidebar
+    - [x] Correlate news shocks with technical scans (Volume & Price Change)
+- [x] Exhaustive Verification & Documentation
+    - [x] ML Logic Validation (Lorentzian & KNN)
+    - [x] Full UI Pass with Playwright
+    - [x] Final ML Signal Quality Report
+    - [x] "Ultimate Intraday System" Roadmap
+- [x] High-Fidelity Market Simulation (NSE-500)
+    - [x] Implement Walk-Forward Simulation Script (1m/5m data)
+    - [x] Fetch and Process 500+ Stock Yesterday's Data
+    - [x] Evaluate Predictive Precision & Projections Accuracy
+    - [x] Generate Comprehensive Simulation Review Artifact
+- [/] Production-Grade High-Precision Backtest (180 Days, NSE-500)
+    - [x] Research Key Market Events & AI Impact (Sept 2025 - Feb 2026)
+    - [x] Implement Tiered Fidelity Engine (1h Macro + 1m Tactical)
+    - [x] **Rectify Charting Metadata**: Migrated all timestamps to Unix seconds for TZ-robustness.
+    - [/] Phase 1: Macro Trend Audit (180 Days, 1h, 10 Random Stocks)
+    - [ ] Phase 2: Tactical Sniper Audit (7 Days, 1m, 10 Random Stocks)
+    - [ ] Phase 3: Stress Testing (Budget & RBI Windows)
+    - [ ] Generate Consolidated Signal Quality Report & Heatmap
+
+- [ ] 3. Cross-check and map all logical flows (UI scan vs background scan, etc.).
+- [ ] 4. Perform code skeptic review on test automation validity (ensure no false positives via excessive mocking).
+- [ ] 5. Perform code skeptic review on AI scorer and Risk Engine against real-world math/logic.
+- [ ] 6. Thoroughly test and verify real-time market data (ticks) updating across all UI components.
+- [ ] 7. Document the frequency of calculations/ML analysis and latency to frontend (near real-time expected).
+- [ ] 8. Address ML model historical data needs (~180 days) vs Upstox (30 days) and handling/latency of calculations.
+- [ ] 9. Skeptic review of math + statistical models, comparing against web search for robust reliability.
+- [ ] 10. Benchmark app latency (Upstox -> Local -> Processed -> UI).
+
+

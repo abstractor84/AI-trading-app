@@ -29,10 +29,12 @@ _NEGATIVE_WORDS = {
     'concern', 'risk', 'miss', 'slump', 'plunge', 'warning', 'probe', 'fine'
 }
 
-def _keyword_sentiment(headlines: list[str]) -> dict:
+def _keyword_sentiment(headlines: list) -> dict:
     """Fast local keyword-based sentiment — used when Gemini is unavailable."""
     pos = neg = 0
-    for h in headlines:
+    # Handle list of strings or list of dicts
+    titles = [h['title'] if isinstance(h, dict) else h for h in headlines]
+    for h in titles:
         words = set(re.findall(r'\b\w+\b', h.lower()))
         pos += len(words & _POSITIVE_WORDS)
         neg += len(words & _NEGATIVE_WORDS)
@@ -51,42 +53,42 @@ def _keyword_sentiment(headlines: list[str]) -> dict:
             "reason": f"Keyword scan: {pos} positive, {neg} negative signals"}
 
 
-def _rss_fetch(clean_ticker: str) -> list[str]:
+def _rss_fetch(clean_ticker: str) -> list[dict]:
     """Fetch from Google News RSS."""
     url = f"https://news.google.com/rss/search?q={clean_ticker}+NSE+stock&hl=en-IN&gl=IN&ceid=IN:en"
     try:
         response = requests.get(url, timeout=6)
         soup = BeautifulSoup(response.content, features="xml")
-        return [item.title.text for item in soup.find_all("item")[:5]]
+        return [{"title": item.title.text, "url": item.link.text} for item in soup.find_all("item")[:5]]
     except Exception as e:
         logger.error(f"RSS fetch failed for {clean_ticker}: {e}")
         return []
 
 
-def _tavily_fetch(query: str) -> list[str]:
+def _tavily_fetch(query: str) -> list[dict]:
     tavily_key = os.getenv("TAVILY_API_KEY")
     if not tavily_key:
         return []
     try:
         from tavily import TavilyClient
         res = TavilyClient(api_key=tavily_key).search(query=query, search_depth="basic", max_results=5)
-        return [r['title'] for r in res.get('results', [])]
+        return [{"title": r['title'], "url": r['url']} for r in res.get('results', [])]
     except Exception as e:
         logger.error(f"Tavily fetch failed: {e}")
     return []
 
 
-def _ddgs_fetch(query: str) -> list[str]:
+def _ddgs_fetch(query: str) -> list[dict]:
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             # Use news() — more targeted for financial news than text()
             results = list(ddgs.news(query, max_results=5))
             if results:
-                return [r['title'] for r in results]
+                return [{"title": r['title'], "url": r['link']} for r in results]
             # fallback: broader text search without timelimit
             results = list(ddgs.text(query, max_results=5))
-            return [r['title'] for r in results]
+            return [{"title": r['title'], "url": r['href']} for r in results]
     except Exception as e:
         logger.error(f"DDGS fetch failed: {e}")
     return []
@@ -107,7 +109,7 @@ class NewsSentimentService:
         if not self.tavily_key:
             logger.warning("TAVILY_API_KEY not found in .env. Tavily search will be skipped.")
 
-    def fetch_news(self, ticker: str, search_engine: str = "gemini", fallback: bool = False) -> list[str]:
+    def fetch_news(self, ticker: str, search_engine: str = "gemini", fallback: bool = False) -> list[dict]:
         """
         Fetch news headlines.
         fallback=False (default): fail fast — only use the selected engine.
@@ -145,14 +147,16 @@ class NewsSentimentService:
             logger.info(f"DDGS empty for {ticker}. Falling back to Tavily.")
             return _tavily_fetch(query)
 
-    def score_sentiment(self, headlines: list[str], provider: str = "google", model_name: str = "gemini-2.5-flash") -> dict:
+    def score_sentiment(self, headlines: list, provider: str = "google", model_name: str = "gemini-3.1-pro") -> dict:
         """Score news sentiment using the user's selected AI provider."""
         if not headlines:
             return {"sentiment": "NEUTRAL", "reason": "No news found"}
 
+        # Extract titles for AI prompt
+        titles = [h['title'] if isinstance(h, dict) else h for h in headlines]
         prompt = f"""
         Analyze the following recent news headlines for an Indian stock and determine the overall sentiment.
-        Headlines: {headlines}
+        Headlines: {titles}
         
         Respond ONLY with a JSON object in this exact format:
         {{"sentiment": "POSITIVE|NEGATIVE|NEUTRAL", "reason": "Short 1-sentence explanation"}}

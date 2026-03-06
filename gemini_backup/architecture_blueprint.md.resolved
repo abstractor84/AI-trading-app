@@ -1,0 +1,87 @@
+# Gemini NSE Trader V2 - Architecture Blueprint
+
+This document serves as the foundational reference for the system's architecture, components, and design intent. **Always refer to this when making structural changes.**
+
+## 1. High-Level Architecture
+The system is built as a real-time, asynchronous Web Application tailored for Intraday NSE Trading.
+- **Backend:** Python (FastAPI, Uvicorn, SQLAlchemy).
+- **Frontend:** Vanilla JavaScript, HTML, CSS (Lightweight Charts for charting).
+- **Communication:** WebSockets (JSON payloads) for real-time reactivity without polling.
+- **Database:** SQLite ([trading_data.db](file:///home/sakthi/Trading/gemini_nse_trader/trading_data.db)) for lightweight persistence.
+- **External APIs:** 
+  - Upstox (Primary execution & high-fidelity historical data)
+  - yfinance (Fallback data & fundamentals)
+  - Google Gemini/Groq/SambaNova (AI Advice)
+  - Search Engines: DuckDuckGo Search (DDGS), Google Gemini Search, Tavily
+
+## 2. Core Components Diagram
+
+```mermaid
+graph TD
+    Client[Frontend: app.js] <-->|WebSocket| WS[ws_handler.py]
+    WS --> State[AppState: state.py]
+    WS --> Risk[RiskEngine: risk_engine.py]
+    WS --> API[Upstox/yfinance/AI_APIs]
+    
+    BG[BackgroundEngine: background_engine.py] -->|1. Polling Data| TA[TechnicalAnalysis: technical_analysis.py]
+    BG -->|2. Evaluate Check| Risk
+    BG -->|3. AI Schedule| AI[AI Scorer: ai_scorer.py]
+    BG -->|4. Push Update| WS
+    
+    State <--> DB[(SQLite: models.py)]
+    TA <--> API
+```
+
+## 3. Module Responsibilities
+
+### Framework & Orchestration
+- **[main.py](file:///home/sakthi/Trading/gemini_nse_trader/main.py)**: The FastAPI entrypoint. Handles Upstox OAuth routes, serves static files, and initializes the lifecycle context (starting the background engine).
+- **[background_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/background_engine.py)**: The heartbeat of the system. Runs a continuous async loop that:
+  - Updates P&L and Trailing SL for open trades.
+  - Generates realistic, hybrid ML 3 PM projections (blending ARIMA, Fourier, VWAP Gravity, KNN, and advanced ML models for highest accuracy).
+  - Triggers automated AI Scans.
+  - Broadcasts full state updates to the WebSocket manager.
+- **[ws_handler.py](file:///home/sakthi/Trading/gemini_nse_trader/ws_handler.py)**: Central router for all incoming frontend commands ([log_trade](file:///home/sakthi/Trading/gemini_nse_trader/services/state.py#174-209), `trigger_scan`, `get_chart_data`, [close_trade](file:///home/sakthi/Trading/gemini_nse_trader/services/state.py#210-240)). 
+
+### Business Logic Services (`/services`)
+- **[state.py](file:///home/sakthi/Trading/gemini_nse_trader/services/state.py) ([AppState](file:///home/sakthi/Trading/gemini_nse_trader/services/state.py#17-254))**: In-memory single source of truth for UI state. Crucially, ensures critical UI data (AI recommendations, timeline events, closed trades) is synced to the database and persisted for a strict 90-day retention period across app restarts.
+- **[risk_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/services/risk_engine.py)**: Pure mathematical gatekeeper. Calculates ATR-based Stop Loss, Targets, trailing SL, and validates position sizing (Max Loss). Rejects trades that break mathematical rules *before* logging.
+- **[market_phase.py](file:///home/sakthi/Trading/gemini_nse_trader/services/market_phase.py)**: Granular state machine mapping exact IST time to micro-market phases to tightly control background engine aggressiveness and identify specific volatility windows.
+- **[ai_scorer.py](file:///home/sakthi/Trading/gemini_nse_trader/services/ai_scorer.py)**: The LLM interface layer. Controls prompts. Includes strict per-provider quota management (max 30 calls/day per provider: Gemini, Groq, SambaNova) with low-quota (<10%) warning alerts.
+- **[technical_analysis.py](file:///home/sakthi/Trading/gemini_nse_trader/services/technical_analysis.py)**: Wraps Upstox/yfinance. Computes RSI, MACD, ADX, VWAP, etc., using `pandas-ta`. Evaluates a base "Math Probability" (0.0 to 1.0) before passing stocks to the AI scorer.
+- **[advanced_indicators.py](file:///home/sakthi/Trading/gemini_nse_trader/services/advanced_indicators.py)**: Experimental quantitative logic (e.g., initial k-NN Lorentzian Classification).
+
+### Data Layer
+- **[models.py](file:///home/sakthi/Trading/gemini_nse_trader/models.py)**: SQLAlchemy definitions ([Trade](file:///home/sakthi/Trading/gemini_nse_trader/models.py#11-42), [MarketSnapshot](file:///home/sakthi/Trading/gemini_nse_trader/models.py#44-68), [AIInteraction](file:///home/sakthi/Trading/gemini_nse_trader/models.py#70-86), [Watchlist](file:///home/sakthi/Trading/gemini_nse_trader/models.py#88-93), [AppSettings](file:///home/sakthi/Trading/gemini_nse_trader/models.py#103-119), [DailySummary](file:///home/sakthi/Trading/gemini_nse_trader/models.py#141-154)). The Watchlist model is actively used to provide users friendly tracking of specific stocks, like in premium trading apps.
+- **[database.py](file:///home/sakthi/Trading/gemini_nse_trader/database.py)**: Strict centralized SQLite data layer. Always guarantees connection to [trading_data.db](file:///home/sakthi/Trading/gemini_nse_trader/trading_data.db) explicitly handling migrations to prevent duplicate or stranded db files.
+
+### Flow Paths & Dependency Mappings
+
+**1. Manual UI Scan Flow:**
+- User clicks "Scan Now" ([app.js](file:///home/sakthi/Trading/gemini_nse_trader/static/js/app.js)) &rarr; WS message `trigger_scan`.
+- [ws_handler.py](file:///home/sakthi/Trading/gemini_nse_trader/ws_handler.py) routes the request.
+- [stock_discovery.py](file:///home/sakthi/Trading/gemini_nse_trader/services/stock_discovery.py) fetches top N volume/momentum stocks.
+- [technical_analysis.py](file:///home/sakthi/Trading/gemini_nse_trader/services/technical_analysis.py) filters candidates using a Base Math Probability score.
+- **Pre-AI Context Gathering:** System invokes `DDGS` (free & unlimited regardless of user's chosen search engine) to fetch recent, present, and soon-expected news, events, sector sentiments, and trends for the specific stock/sector.
+- [ai_scorer.py](file:///home/sakthi/Trading/gemini_nse_trader/services/ai_scorer.py) consults the LLM (Gemini/Groq) using the math-verified candidates enriched with the comprehensive DDGS context.
+- [risk_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/services/risk_engine.py) calculates the exact SL, Targets, and risk-adjusted position sizes (rejecting invalid setups).
+- [ws_handler.py](file:///home/sakthi/Trading/gemini_nse_trader/ws_handler.py) broadcasts `scan_results` to all clients.
+- [app.js](file:///home/sakthi/Trading/gemini_nse_trader/static/js/app.js) renders the Rich Stock Cards.
+
+**2. Autonomous Background Engine Flow:**
+- [background_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/background_engine.py) executes a cron tick and checks [market_phase.py](file:///home/sakthi/Trading/gemini_nse_trader/services/market_phase.py).
+- If a phase demands an autonomous scan, the exact same backend pipeline is called ([discovery](file:///home/sakthi/Trading/gemini_nse_trader/simulate_test.py#382-390) &rarr; [math](file:///home/sakthi/Trading/gemini_nse_trader/services/technical_analysis.py#170-215) &rarr; [ai](file:///home/sakthi/Trading/gemini_nse_trader/services/ai_scorer.py#240-287) &rarr; [risk](file:///home/sakthi/Trading/gemini_nse_trader/simulate_test.py#122-183)).
+- Instead of returning a UI payload, it updates the [AppState](file:///home/sakthi/Trading/gemini_nse_trader/services/state.py#17-254) ([state.py](file:///home/sakthi/Trading/gemini_nse_trader/services/state.py)) globally.
+- [background_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/background_engine.py) broadcasts a massive `state_update` over WebSockets, inherently syncing the UI.
+
+**3. Future Math & Statistical Models Pipeline (Architecture Hook):**
+- **Data Ingestion** &rarr; [technical_analysis.py](file:///home/sakthi/Trading/gemini_nse_trader/services/technical_analysis.py) & [ws_handler.py](file:///home/sakthi/Trading/gemini_nse_trader/ws_handler.py) (live tick propagation from Upstox).
+- **Core Stat/Math Logic** (scikit-learn CPU-bound models) &rarr; [advanced_indicators.py](file:///home/sakthi/Trading/gemini_nse_trader/services/advanced_indicators.py) & [price_projector.py](file:///home/sakthi/Trading/gemini_nse_trader/services/price_projector.py).
+- **Local Intelligence (Future)** &rarr; Periodic news and sentiment analysis driven entirely by local AI (e.g., Ollama models or advanced local NLP python libs) replacing cloud AI API dependency for bulk continuous sentiment tracking.
+- **Signal Aggregation** &rarr; [risk_engine.py](file:///home/sakthi/Trading/gemini_nse_trader/services/risk_engine.py) combines LLM direction + Math Model confidence to act as the supreme final arbiter for trade validity.
+
+## 4. Key Design Principles
+1. **Risk Engine is Law**: The AI only gives directional judgment. Precise SL, TP, and position sizes are mathematically enforced by the local Risk Engine based on ATR and capital settings.
+2. **WebSocket State Broadcast**: The frontend is dumb. It reacts to massive state payload updates (`state_update`, `ai_advisor_update`, `trades_update`) pushed by the server.
+3. **Phase-Awareness**: Background refresh speeds and AI trigger counts adapt to the exact minute of the NSE trading day based on highly granular sub-phases.
+4. **Resiliency**: If Upstox errors out, it falls back to yfinance. Cloud AI fallback (e.g., Gemini to Groq) is strictly a User Choice. If user disables fallback, errors trigger a popup failure. Disabling APi fallback requires an explicit user consent/risk warning.

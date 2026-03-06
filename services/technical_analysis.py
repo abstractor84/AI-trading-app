@@ -3,6 +3,10 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import logging
+import datetime
+import pytz
+import datetime
+import pytz
 
 from services.upstox_service import UpstoxService
 from services.advanced_indicators import classifier
@@ -185,30 +189,33 @@ class TechnicalAnalysisService:
         
         score = 0.0
         
-        # 1. Trend Alignment (0.3 weight)
-        if ema9 > ema21 and close > vwap:
-            score += 0.3  # Strong bullish alignment
-        elif ema9 < ema21 and close < vwap:
-            score += 0.3  # Strong bearish alignment
-        elif ema9 > ema21 or ema9 < ema21:
-            score += 0.15 # Weak trend
+        # 1. Trend Alignment (0.4 weight)
+        is_bullish = ema9 > ema21 and close > vwap
+        is_bearish = ema9 < ema21 and close < vwap
+        
+        if is_bullish or is_bearish:
+            score += 0.4  # Strong alignment in either direction
+        elif (ema9 > ema21 and close < vwap) or (ema9 < ema21 and close > vwap):
+            score += 0.1  # Mismatched trend/price (weak)
             
-        # 2. Momentum / ADX (0.3 weight)
+        # 2. Momentum / ADX (0.2 weight)
         if adx > 25:
-            score += 0.3  # High momentum
+            score += 0.2  # High momentum
         elif adx > 15:
-            score += 0.15 # Moderate momentum
+            score += 0.1 # Moderate momentum
             
-        # 3. RSI Oscillators (0.2 weight)
-        if 40 <= rsi <= 60:
-            score += 0.1  # Choppy neutral
-        elif 30 <= rsi <= 70:
-            score += 0.2  # Healthy active
+        # 3. RSI Oscillators (0.2 weight) - Hard Blocks for overextension
+        if is_bullish:
+            if rsi > 75: score = 0 # Overbought, skip AI
+            elif 40 <= rsi <= 70: score += 0.2
+        elif is_bearish:
+            if rsi < 25: score = 0 # Oversold, skip AI
+            elif 30 <= rsi <= 60: score += 0.2
         else:
-            score += 0.0  # Overextended (exhaustion risk)
+            if 40 <= rsi <= 60: score += 0.1
             
         # 4. MACD Directional Bias (0.2 weight)
-        if (ema9 > ema21 and macd_hist > 0) or (ema9 < ema21 and macd_hist < 0):
+        if (is_bullish and macd_hist > 0) or (is_bearish and macd_hist < 0):
             score += 0.2  # MACD supports the trend
             
         return round(score, 2)
@@ -231,31 +238,41 @@ class TechnicalAnalysisService:
         vwap = ta_data.get("vwap", 0)
 
         # 1. Trend Alignment (Highest Weight)
-        if ema_9 > ema_21 and close > vwap: score += 2
-        elif ema_9 < ema_21 and close < vwap: score -= 2
+        if ema_9 > ema_21 and close > vwap: 
+            score += 3
+        elif ema_9 < ema_21 and close < vwap: 
+            score -= 3
+        elif close < vwap and close < ema_9: # Strong bearish pressure
+            score -= 2
+        elif close > vwap and close > ema_9: # Strong bullish pressure
+            score += 2
 
         # 2. Momentum (MACD)
-        if macd_hist > 0.5: score += 1
-        elif macd_hist < -0.5: score -= 1
+        if macd_hist > 0.2: score += 1
+        elif macd_hist < -0.2: score -= 1
 
         # 3. Strength (ADX)
         if adx > 25:
             if score > 0: score += 1
             elif score < 0: score -= 1
 
-        # 4. Exhaustion (RSI)
-        if rsi > 70: score -= 1 # Overbought
-        elif rsi < 30: score += 1 # Oversold
+        # 4. Exhaustion (RSI) - Hard Blocks
+        if rsi > 75: 
+            if score > 0: score = 0 # Block Buy if overbought
+            score -= 2
+        elif rsi < 25: 
+            if score < 0: score = 0 # Block Short if oversold
+            score += 2
 
         # 5. Volume Surge
-        if vol_surge > 2.0:
+        if vol_surge > 1.5:
             if score > 0: score += 1
             elif score < 0: score -= 1
 
         if score >= 4: return "STRONG BUY"
         if score >= 2: return "BUY"
-        if score <= -4: return "SHORT SELL" # Standardized from STRONG SELL
-        if score <= -2: return "SELL"       # Standardized from SELL
+        if score <= -4: return "STRONG SHORT SELL"
+        if score <= -2: return "SHORT SELL"
         return "NEUTRAL"
 
     def get_connection_status(self) -> dict:

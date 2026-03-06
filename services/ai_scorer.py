@@ -46,7 +46,7 @@ class AIAdvisorService:
     # ─── Prompt Type 1: SCAN ────────────────────────────────────────
     def scan_market(self, candidates: list[dict], global_context: dict,
                     phase_ctx: dict, provider: str = "google",
-                    model_name: str = "gemini-2.5-flash") -> dict:
+                    model_name: str = "gemini-3.1-pro", ai_fallback: bool = True) -> dict:
         """
         Batch-analyze multiple stocks in ONE AI call.
         Returns top 1-3 actionable picks with reasoning.
@@ -71,7 +71,8 @@ class AIAdvisorService:
                 f"MACD_Hist={ta.get('macd_hist', 0):.2f}, "
                 f"ADX={ta.get('adx_14', 0):.1f}, "
                 f"VolSurge={ta.get('vol_surge', 0):.1f}x, "
-                f"ATR=₹{c.get('atr', 0):.2f}"
+                f"ATR=₹{c.get('atr', 0):.2f}\n"
+                f"News Context: {'; '.join(c.get('news_context', [])) if c.get('news_context') else 'No recent news'}"
             )
             stock_summaries.append(summary)
 
@@ -119,12 +120,13 @@ If NO high-conviction trades exist despite the high math probability, return: []
 """
 
         return self._call_ai(prompt, "SCAN", provider, model_name,
-                             input_summary=f"Scanned {len(candidates)} stocks in {phase_ctx.get('phase', 'UNKNOWN')}")
+                             input_summary=f"Scanned {len(candidates)} stocks in {phase_ctx.get('phase', 'UNKNOWN')}",
+                             ai_fallback=ai_fallback)
 
     # ─── Prompt Type 2: POSITION REVIEW ─────────────────────────────
     def review_positions(self, open_trades: list[dict], global_context: dict,
                          phase_ctx: dict, provider: str = "google",
-                         model_name: str = "gemini-2.5-flash") -> dict:
+                         model_name: str = "gemini-3.1-pro", ai_fallback: bool = True) -> dict:
         """
         Review all open positions and advise on each.
         Returns per-position guidance: HOLD, TRAIL, PARTIAL BOOK, EXIT.
@@ -180,12 +182,13 @@ OUTPUT: Strictly valid JSON array:
 """
 
         return self._call_ai(prompt, "POSITION_REVIEW", provider, model_name,
-                             input_summary=f"Reviewed {len(open_trades)} open positions")
+                             input_summary=f"Reviewed {len(open_trades)} open positions",
+                             ai_fallback=ai_fallback)
 
     # ─── Prompt Type 3: EXIT GUIDANCE ───────────────────────────────
     def exit_guidance(self, open_trades: list[dict], global_context: dict,
                       phase_ctx: dict, provider: str = "google",
-                      model_name: str = "gemini-2.5-flash") -> dict:
+                      model_name: str = "gemini-3.1-pro", ai_fallback: bool = True) -> dict:
         """
         Power Hour / Close-of-day exit advice.
         Specifically focuses on: should user close everything now?
@@ -234,19 +237,20 @@ OUTPUT: Strictly valid JSON:
 """
 
         return self._call_ai(prompt, "EXIT_GUIDANCE", provider, model_name,
-                             input_summary=f"Exit guidance for {len(open_trades)} positions, total P&L ₹{total_pnl:.0f}")
+                             input_summary=f"Exit guidance for {len(open_trades)} positions, total P&L ₹{total_pnl:.0f}",
+                             ai_fallback=ai_fallback)
 
     # ─── Core AI Call (shared) ──────────────────────────────────────
     def _call_ai(self, prompt: str, prompt_type: str, provider: str,
-                 model_name: str, input_summary: str = "") -> dict:
+                 model_name: str, input_summary: str = "", ai_fallback: bool = True) -> dict:
         """
         Execute AI call with quota check and audit logging.
         """
         # Quota gate
-        quota = quota_svc.check_quota(model_name)
+        quota = quota_svc.check_quota(provider) # User feedback: per-provider quota
         if not quota["can_call"]:
-            logger.warning(f"Quota exceeded for {model_name}")
-            return {"error": f"AI quota exceeded for {model_name}. Try again later."}
+            logger.warning(f"Quota exceeded for {provider}")
+            return {"error": f"AI quota exceeded for {provider} (30/day). Try again later."}
 
         try:
             if provider == "google":
@@ -262,12 +266,19 @@ OUTPUT: Strictly valid JSON:
             self._log_interaction(prompt_type, model_name, input_summary, result)
             
             # Update local quota tracker
-            quota_svc.log_usage(model_name)
+            quota_svc.log_usage(provider)
+
+            if quota.get("low_quota", False):
+                result["quota_warning"] = f"Warning: Less than 10% quota remaining for {provider}."
 
             return result
 
         except Exception as e:
             if "429" in str(e) and model_name != "gemini-2.5-flash":
+                if not ai_fallback:
+                    logger.warning(f"AI Model {model_name} rate limited (429). Fallback is DISABLED. Failing.")
+                    return {"error": str(e)}
+                
                 logger.warning(f"AI Model {model_name} rate limited (429). Falling back to gemini-2.5-flash...")
                 try:
                     if provider == "google":
@@ -276,7 +287,7 @@ OUTPUT: Strictly valid JSON:
                         result = self._call_sambanova("Meta-Llama-3.1-8B-Instruct", prompt) # Known default for sambanova
                     else:
                         result = self._call_groq(model_name, prompt) # Keep groq for now
-                    quota_svc.log_usage("gemini-2.5-flash")
+                    quota_svc.log_usage(provider)
                     return result
                 except Exception as ef:
                     logger.error(f"AI Fallback also failed: {ef}")

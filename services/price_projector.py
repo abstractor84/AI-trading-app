@@ -15,7 +15,11 @@ Output: arrays of timestamps, projected prices, upper/lower confidence bands.
 import numpy as np
 import pandas as pd
 import logging
+import warnings
 from datetime import datetime, timedelta
+
+# Suppress statsmodels warnings for cleaner logs
+warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
 
 logger = logging.getLogger(__name__)
 

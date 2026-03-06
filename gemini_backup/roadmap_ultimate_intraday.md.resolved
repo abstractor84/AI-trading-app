@@ -1,0 +1,60 @@
+# Roadmap: The World's Most Powerful Intraday System
+
+This roadmap maps the current **SuperNova** architecture to the hybrid blueprint of a "World-Class" intraday system, fusing microstructure math, deep learning, and robust risk guardrails.
+
+## Phase 1: Foundational Intelligence (Current State)
+We have successfully implemented the core signal and news pipeline:
+- **Lorentzian Classifier (Stage 1-3):** Non-linear pattern recognition for high-confidence entries.
+- **KNN Forecaster:** Short-horizon directional bias.
+- **Sentinel Guard V2:** Correlation of news shocks with volume & price velocity (Local Intelligence).
+- **Data Splicing:** Hybrid 180d Daily + 30d Intraday context for ML models.
+
+---
+
+## Phase 2: Microstructure & Regime Mastery (Next Horizon)
+Goal: Move beyond OHLCV into the "Tick & Order Flow" world.
+
+### 1. The Microstructure Meta‑Model
+- **Statistical Core:** Implement Hawkes-process measure of order flow imbalance (OFI).
+- **AI Core:** Train a DeepLOB (Transformer over Order Book) to predict the next 10-tick move.
+- **The Twist:** Use OFI as a dynamic filter—ML signals are only valid if Order Book imbalance supports them.
+
+### 2. Dual-View Volatility & Regime Detection
+- **Statistical Core:** Markov-switching HMM for "Bull Squeeze", "Dull Range", and "News Crash".
+- **AI Core:** Temporal Fusion Transformer (TFT) for intraday realized volatility forecasting.
+- **The Twist:** Define regime-specific ML thresholds. (e.g., in "Dull Range", Lorentzian requires 0.8 score; in "Tend", 0.4 is sufficient).
+
+---
+
+## Phase 3: Hybrid Construction & Trade Policy (The Edge)
+Goal: Fusing math-derived guardrails with AI-driven policy.
+
+### 1. Two-Stage Residual Forecaster
+- **Stage 1 (Math):** A parsimonious linear factor model (Micro-Momentum, Basis, Sector-Beta).
+- **Stage 2 (AI):** A deep model that learns only the **residuals** (the alpha Stage 1 misses).
+- **Benefit:** Clean P&L attribution—know exactly how much "AI" added to the math.
+
+### 2. RL-Student / Math-Teacher Construction
+- **Teacher:** Stochastic control solution for optimal entry/exit within a volatility band.
+- **Student (RL):** A PPO agent that learns to optimize execution *inside* those bands.
+- **Safety:** RL can never widen an SL beyond the math-derived VaR (Value at Risk) limit.
+
+---
+
+## Phase 4: The Explainable Co-Pilot (The User Layer)
+Goal: Transparent, ethical, and high-impact guidance.
+
+### 1. The Explanation Contract
+- Implement an LLM-based engine (Gemini) that translates Shapley values into plain language.
+- **Veto Logic:** If the Math-Model and AI-Model attributions disagree (e.g., Math says "Reversal", AI says "Trend Persistence"), the trade is marked "DISPUTED" or hidden.
+
+### 2. The Indian Market Digital Twin
+- Build a simulator calibrated on NSE microstructure.
+- **Synthetic Crises:** Stress-test the Sentinel Guard against "flash crashes" and "Limit-Up/Down" scenarios before deploying capital.
+
+---
+
+## Summary Architecture (Horizon 2026+)
+> **Math provides the Guardrails; AI provides the Performance.**
+> 
+> *The system maintains a "Trust Score" for every component. If a model is statistically rejected via rolling t-tests, it is auto-toggled to 'PAPER' mode until it recovers.*

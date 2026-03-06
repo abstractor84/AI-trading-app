@@ -1,0 +1,6 @@
+--- BENCHMARKING ML INDICATORS FOR RELIANCE.NS ---
+Data Fetch (4468 bars): 2.2854s
+Lorentzian Classifier (200 bar window): 0.5013s
+Adaptive SuperTrend (K-Means Clustering): 0.3087s
+KNN Strategy (Pattern Shading): 0.0073s
+--- TOTAL ML PROCESSING TIME: 0.8173s ---
