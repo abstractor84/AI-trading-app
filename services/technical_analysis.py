@@ -5,8 +5,6 @@ import numpy as np
 import logging
 import datetime
 import pytz
-import datetime
-import pytz
 
 from services.upstox_service import UpstoxService
 from services.advanced_indicators import classifier
@@ -16,54 +14,63 @@ logger = logging.getLogger(__name__)
 # Singleton Upstox instance shared across calls
 _upstox_svc = UpstoxService()
 
+# Cache for connection status
+_status_cache = {"last_check": 0, "data": None}
+
 class TechnicalAnalysisService:
     def __init__(self):
         pass
 
-    def fetch_ohlcv(self, ticker: str, period="5d", interval="5m", data_provider="upstox"):
-        """Fetch 5-minute OHLCV data. Uses Upstox by default, falls back to yfinance."""
-        if _upstox_svc.is_authenticated:
-            days = int(period.replace("d", "")) if period.endswith("d") else 5
+    def fetch_ohlcv(self, ticker: str, period="30d", interval="5m", data_provider="upstox", fallback_enabled=True):
+        """Fetch OHLCV data. Uses Upstox by default, falls back to yfinance only if allowed."""
+        df = None
+        if data_provider == "upstox" and _upstox_svc.is_authenticated:
+            # Existing Upstox Logic
+            days = 30
+            if period.endswith("d"): days = int(period.replace("d", ""))
+            elif period.endswith("mo"): days = int(period.replace("mo", "")) * 30
             
-            # Upstox API only supports 1minute or 30minute. We pull 1min and resample to 5min.
-            upstox_interval = "1minute" if interval == "5m" else interval.replace("m", "minute")
-            if upstox_interval == "5minute": upstox_interval = "1minute" # Mandatory correction
+            if interval == "1m": unit, num_int = "minutes", "1"
+            elif interval == "5m": unit, num_int = "minutes", "5"
+            elif interval == "15m": unit, num_int = "minutes", "15"
+            elif interval == "30m": unit, num_int = "minutes", "30"
+            elif interval == "1h": unit, num_int = "hours", "1"
+            elif interval == "1d": unit, num_int = "days", "1"
+            else: unit, num_int = "minutes", "5"
             
-            df_upstox = _upstox_svc.fetch_ohlcv(ticker, days=days, interval=upstox_interval)
+            df_upstox = _upstox_svc.fetch_ohlcv(ticker, days=days, interval=num_int, unit=unit)
             
             if df_upstox is not None and not df_upstox.empty:
-                # Resample to 5-minute bars if requested 5m
-                if interval == "5m" and upstox_interval == "1minute":
-                    df_upstox = df_upstox.resample('5min').agg({
-                        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-                    }).dropna()
-                
-                if len(df_upstox) >= 10:
-                    logger.info(f"Using Upstox data for {ticker} ({len(df_upstox)} rows, resampled to {interval})")
-                    return df_upstox
-            
-            logger.warning(f"Upstox data unavailable for {ticker}. Falling back to yfinance.")
-        else:
-            if data_provider == "upstox":
-                logger.debug(f"Upstox not authenticated, skipping for {ticker}")
+                # Resampling Logic
+                if interval == "5m" and len(df_upstox) > 15:
+                    df_upstox = df_upstox.resample('5min').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+                elif interval == "15m" and len(df_upstox) > 15:
+                    df_upstox = df_upstox.resample('15min').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
+                elif interval == "1h" and len(df_upstox) > 60:
+                    df_upstox = df_upstox.resample('1h').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
 
-        # Default: yfinance - Using Ticker object for cleaner single-ticker data
-        try:
-            t = yf.Ticker(ticker)
-            df = t.history(period=period, interval=interval, auto_adjust=True)
-            if df.empty:
-                # Fallback to download if history fails
-                df = yf.download(ticker, period=period, interval=interval, auto_adjust=True, progress=False)
+                df = df_upstox
+                df.columns = [c.capitalize() for c in df.columns]
+
+        if df is None:
+            if not fallback_enabled and data_provider == "upstox":
+                logger.error(f"Upstox data fetch failed for {ticker} and Fallback is DISABLED.")
+                return pd.DataFrame() # Return empty to trigger error in UI
+
+            # Fallback to yfinance
+            logger.info(f"Using yfinance for {ticker} (Provider: {data_provider}, Fallback: {fallback_enabled})")
+            try:
+                yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
+                df = yf.download(yf_ticker, period=period, interval=interval, auto_adjust=True, progress=False)
                 if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(-1)
-            
-            df.dropna(inplace=True)
-            # Ensure columns are standard case if yfinance/upstox differ
-            df.columns = [c.capitalize() for c in df.columns]
-            return df
-        except Exception as e:
-            logger.error(f"Failed to fetch data for {ticker}: {e}")
-            return pd.DataFrame()
+                    df.columns = df.columns.get_level_values(0)
+                df.dropna(inplace=True)
+                df.columns = [str(c).capitalize() for c in df.columns]
+            except Exception as e:
+                logger.error(f"Data fetch failed globally for {ticker}: {e}")
+                df = pd.DataFrame()
+        
+        return df
 
     def compute_indicators(self, df: pd.DataFrame):
         """Compute RSI, EMA, VWAP, MACD, BB, ADX, and Volume Surge."""
@@ -131,34 +138,30 @@ class TechnicalAnalysisService:
         if isinstance(avg_vol_20, pd.Series): avg_vol_20 = avg_vol_20.iloc[-1]
         
         vol_surge = float(current_vol / avg_vol_20) if avg_vol_20 > 0 else 1.0
+        change_pct = float(((df['Close'].iloc[-1] - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100) if len(df) > 1 else 0.0
 
         latest = df.iloc[-1]
 
-        # Extract names from pandas_ta suffixes which can vary
-        macd_col = [c for c in df.columns if 'MACD_' in c][0]
-        macdh_col = [c for c in df.columns if 'MACDh_' in c][0]
-        macds_col = [c for c in df.columns if 'MACDs_' in c][0]
-        
-        bbm_col = [c for c in df.columns if 'BBM_' in c][0]
-        bbu_col = [c for c in df.columns if 'BBU_' in c][0]
-        bbl_col = [c for c in df.columns if 'BBL_' in c][0]
-        
-        adx_col = [c for c in df.columns if 'ADX_' in c][0]
-        
+        # Robust Column Extraction for Indicators
+        def get_col(pattern, default=0):
+            cols = [c for c in df.columns if pattern in c]
+            return float(latest[cols[0]]) if cols else default
+
         return {
             "close": float(latest['Close']),
-            "ema_9": float(latest['EMA_9']),
-            "ema_21": float(latest['EMA_21']),
-            "rsi_14": float(latest['RSI_14']),
-            "macd": float(latest[macd_col]),
-            "macd_hist": float(latest[macdh_col]),
-            "macd_signal": float(latest[macds_col]),
-            "bb_upper": float(latest[bbu_col]),
-            "bb_lower": float(latest[bbl_col]),
-            "bb_mid": float(latest[bbm_col]),
-            "adx_14": float(latest[adx_col]),
+            "ema_9": get_col('EMA_9'),
+            "ema_21": get_col('EMA_21'),
+            "rsi_14": get_col('RSI_14', 50),
+            "macd": get_col('MACD_', 0),
+            "macd_hist": get_col('MACDh_', 0),
+            "macd_signal": get_col('MACDs_', 0),
+            "bb_upper": get_col('BBU_', 0),
+            "bb_lower": get_col('BBL_', 0),
+            "bb_mid": get_col('BBM_', 0),
+            "adx_14": get_col('ADX_', 0),
             "vwap": float(current_vwap),
             "vol_surge": float(round(vol_surge, 2)),
+            "change_pct": round(change_pct, 2),
             "lorentzian": classifier.classify(df)
         }
 
@@ -276,10 +279,20 @@ class TechnicalAnalysisService:
         return "NEUTRAL"
 
     def get_connection_status(self) -> dict:
-        """Unified status for all external data & AI providers."""
+        """Unified status for all external data & AI providers with caching."""
+        global _status_cache
+        import time
+        now = time.time()
+        
+        # Cache for 30 seconds to avoid blocking WebSocket loop with network calls
+        if _status_cache["data"] and (now - _status_cache["last_check"] < 30):
+            return _status_cache["data"]
+
         from services.quota_service import quota_svc
+        # fetch_profile call can be slow, but it's a direct API call
         upstox_profile = _upstox_svc.fetch_profile()
-        return {
+        
+        status = {
             "upstox": {
                 "connected": _upstox_svc.is_authenticated,
                 "user": upstox_profile.get("user_name") if upstox_profile else None,
@@ -290,11 +303,123 @@ class TechnicalAnalysisService:
                 "limit": 20
             }
         }
+        
+        _status_cache["last_check"] = now
+        _status_cache["data"] = status
+        return status
+
+    def get_chart_payload(self, ticker: str, interval: str = "5m"):
+        """
+        Unified method to prepare the complete V3 Chart Payload.
+        Includes OHLC, Projections, and all ML Indicators.
+        """
+        import os
+        import time
+        from services.price_projector import price_projector
+        from services.advanced_indicators import classifier, adaptive_st
+
+        # 1. Simulation Check
+        if os.getenv("SIMULATION", "false").lower() == "true":
+            now = int(time.time()) - 19800
+            step = 60 if interval == '1m' else 300 if interval == '5m' else 900 if interval == '15m' else 3600 if interval == '1h' else 86400
+            mock_ohlc = [{"time": now - i * step, "open": 100+i%5, "high": 105+i%5, "low": 95+i%5, "close": 102+i%5} for i in range(100, 0, -1)]
+            return {
+                "instrument_key": ticker,
+                "current_price": 102.0,
+                "ohlc": mock_ohlc,
+                "adx_series": [{"time": c['time'], "value": 25.0 + (i%10)} for i, c in enumerate(mock_ohlc)],
+                "rsi_series": [{"time": c['time'], "value": 45.0 + (i%5)} for i, c in enumerate(mock_ohlc)],
+                "ml_adaptive_st": {"time": [c['time'] for c in mock_ohlc], "value": [98+i%2 for i in range(100)], "trend": [1]*50 + [-1]*50},
+                "ml_lorentzian": [{"time": c['time'], "signal": 1 if i % 20 == 0 else -1 if i % 25 == 0 else 0, "score": 0.5} for i, c in enumerate(mock_ohlc)],
+                "vwap": 101.0,
+                "interval": interval,
+                "projection": [102.5, 103.0, 103.5],
+                "proj_timestamps": [now + i * step for i in range(1, 4)],
+                "upper_band": [104, 105, 106],
+                "lower_band": [101, 101, 101]
+            }
+
+        # 2. Fetch Production Data
+        from services.state import AppState
+        state = AppState() # Temp instance to get settings, ideally passed in
+        
+        period = "1d" if interval == "1m" else "5d" if interval in ["5m", "15m"] else "1mo" if interval == "1h" else "6mo"
+        df = self.fetch_ohlcv(ticker, period, interval, 
+                             data_provider=getattr(state, 'data_provider', 'upstox'),
+                             fallback_enabled=getattr(state, 'fallback_data', True))
+        
+        if df is None or df.empty:
+            return {"error": f"No data available for {ticker}"}
+
+        # 3. Compute Basic Indicators
+        indicators = self.compute_indicators(df)
+        
+        # 4. Generate Projections
+        proj_interval = 1 if interval == "1m" else 5
+        proj_res = price_projector.generate_projection(df, interval_minutes=proj_interval)
+        
+        # 5. Compute ML Series
+        lz_series = classifier.classify_series(df, window=500)
+        st_series = adaptive_st.calculate(df, window=500)
+        
+        # 6. Extract ADX & RSI
+        adx_series = []
+        rsi_series = []
+        import math
+        adx_col = [c for c in df.columns if 'ADX_' in c]
+        if adx_col:
+            adx_vals = df[adx_col[0]].tail(500)
+            for t, v in adx_vals.items():
+                if not math.isnan(v):
+                    adx_series.append({"time": int(t.timestamp()), "value": float(v)})
+        
+        rsi_col = [c for c in df.columns if 'RSI_' in c]
+        if rsi_col:
+            rsi_vals = df[rsi_col[0]].tail(500)
+            for t, v in rsi_vals.items():
+                if not math.isnan(v):
+                    rsi_series.append({"time": int(t.timestamp()), "value": float(v)})
+
+        # 7. Final Assembly
+        current_price = indicators.get("close") if indicators else float(df['Close'].iloc[-1] if 'Close' in df.columns else df['close'].iloc[-1] if 'close' in df.columns else 0)
+        
+        # Safe OHLC extraction
+        def safe_get(row, keys, default=0):
+            for k in keys:
+                if k in row: return float(row[k])
+            return default
+
+        ohlc_list = []
+        for t, r in df.tail(500).iterrows():
+            ohlc_list.append({
+                "time": int(t.timestamp()),
+                "open": safe_get(r, ['Open', 'open']),
+                "high": safe_get(r, ['High', 'high']),
+                "low": safe_get(r, ['Low', 'low']),
+                "close": safe_get(r, ['Close', 'close'])
+            })
+
+        return {
+            "instrument_key": ticker,
+            "current_price": current_price,
+            "ohlc": ohlc_list,
+            "adx_series": adx_series,
+            "rsi_series": rsi_series,
+            "ml_adaptive_st": st_series,
+            "ml_lorentzian": lz_series,
+            "vwap": indicators.get("vwap") if indicators else current_price,
+            "interval": interval,
+            "projection": proj_res.get("projection"),
+            "proj_timestamps": [int(pd.to_datetime(t).timestamp()) for t in proj_res.get("timestamps", [])],
+            "upper_band": proj_res.get("upper_band"),
+            "lower_band": proj_res.get("lower_band")
+        }
 
     def fetch_fundamentals(self, ticker: str):
         """Fetch basic fundamental data via yfinance."""
         try:
-            info = yf.Ticker(ticker).info
+            t = yf.Ticker(ticker)
+            info = t.info
             return {
                 "market_cap": info.get("marketCap", "N/A"),
                 "pe_ratio": info.get("trailingPE", "N/A"),

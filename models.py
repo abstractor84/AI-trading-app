@@ -118,14 +118,14 @@ class AppSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     capital = Column(Float, default=100000.0)
     max_loss_per_trade = Column(Float, default=1000.0)
-    max_daily_loss = Column(Float, default=5000.0)     # V2: Daily loss cap
-    search_engine = Column(String, default="ddgs")
-    data_provider = Column(String, default="yfinance")
-    search_fallback = Column(Boolean, default=False)
-    auto_refresh = Column(Boolean, default=True)
+    max_daily_loss = Column(Float, default=5000.0)
+    search_engine = Column(String, default="tavily")
+    data_provider = Column(String, default="upstox")
+    fallback_data = Column(Boolean, default=True)
+    fallback_search = Column(Boolean, default=True)
+    fallback_ai = Column(Boolean, default=True)
     ai_provider = Column(String, default="google")
     ai_model = Column(String, default="gemini-3.1-pro")
-    ai_fallback = Column(Boolean, default=True)  # V2 Phase 2: Allow disabling fallback
     updated_at = Column(DateTime, default=utc_now_naive)
 
 

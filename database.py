@@ -22,9 +22,9 @@ def get_db():
     finally:
         db.close()
 
-def cleanup_old_records(db, days=90):
+def cleanup_old_records(db, days=100):
     """
-    User Feedback: Keep data persisted for at least 90 days, then clean up.
+    User Feedback: Keep data persisted for at least 90 days (100 days for safety buffer), then clean up.
     Deletes records older than 'days' from trades, ai_interactions, and summaries.
     """
     import logging
@@ -50,3 +50,25 @@ def cleanup_old_records(db, days=90):
     except Exception as e:
         logger.error(f"Failed to cleanup old records: {e}")
         db.rollback()
+
+def wipe_all_data():
+    """Wipes all data from tables. Strictly for SIMULATION/TESTING cleanup."""
+    import logging
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+    try:
+        from models import Trade, AIInteraction, DailySummary, MarketSnapshot, Watchlist, WatchlistStock, DashboardStock
+        db.query(Trade).delete()
+        db.query(AIInteraction).delete()
+        db.query(DailySummary).delete()
+        db.query(MarketSnapshot).delete()
+        db.query(WatchlistStock).delete()
+        db.query(Watchlist).delete()
+        db.query(DashboardStock).delete()
+        db.commit()
+        logger.warning("DB Wipe: All tables cleared successfully.")
+    except Exception as e:
+        logger.error(f"DB Wipe failed: {e}")
+        db.rollback()
+    finally:
+        db.close()

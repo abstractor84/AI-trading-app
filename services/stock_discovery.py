@@ -1,32 +1,33 @@
+import logging
+import asyncio
 import yfinance as yf
 import pandas as pd
-import requests
-import io
-import logging
-
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded universe: Nifty 50 + Nifty Next 50 — used as instant fallback
-# (Wikipedia fetch may fail or be slow — this ensures scan always works)
+# Core NSE universe for discovery
 _NIFTY100_SYMBOLS = [
-    # Nifty 50
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR",
-    "BHARTIARTL", "ITC", "KOTAKBANK", "LT", "SBIN", "BAJFINANCE",
-    "AXISBANK", "MARUTI", "ASIANPAINT", "HCLTECH", "SUNPHARMA", "TITAN",
-    "WIPRO", "ONGC", "NTPC", "POWERGRID", "ULTRACEMCO", "NESTLEIND",
-    "TECHM", "BAJAJFINSV", "BPCL", "COALINDIA", "GRASIM", "TATACONSUM",
-    "TATAMOTORS", "BRITANNIA", "INDUSINDBK", "APOLLOHOSP", "SBILIFE",
-    "JSWSTEEL", "HINDALCO", "HDFCLIFE", "DIVISLAB", "CIPLA",
-    "DRREDDY", "EICHERMOT", "UPL", "ADANIPORTS", "ADANIENT",
-    "TATASTEEL", "ADANIENSOL", "M&M", "TRENT", "BEL",
+    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "BHARTIARTL",
+    "INFY", "SBI-N", "LICI", "ITC", "HINDUNILVR",
+    "LT", "BAJFINANCE", "HCLTECH", "MARUTI", "SUNPHARMA",
+    "ADANIENT", "KOTAKBANK", "TITAN", "ONGC", "TATAMOTORS",
+    "NTPC", "AXISBANK", "ADANIPORTS", "ASIANPAINT", "COALINDIA",
+    "BAJAJHLDNG", "BAJAJ-AUTO", "BHAL", "JSWSTEEL", "ADANIPOWR",
+    "M&M", "TRENT", "BEL", "ULTRACEMCO", "SIEMENS",
+    "GRASIM", "SBILIFE", "BPCL", "NESTLEIND", "HAL",
+    "ZOMATO", "PNB", "IOB", "CANBK", "INDHOTEL",
+    "DLF", "EICHERMOT", "HINDALCO", "DIVISLAB", "CIPLA",
+    "BRITANNIA", "TATASTEEL", "ADANIENSOL", "M&M", "TRENT", "BEL",
     # Nifty Next 50
-    "ABB", "ADANIPOWER", "AMBUJACEM", "BAJAJ-AUTO", "BANKBARODA",
-    "BERGEPAINT", "BOSCHLTD", "CANBK", "CHOLAFIN", "COLPAL",
-    "DABUR", "DLF", "GAIL", "GODREJCP", "HAVELLS",
-    "INDIGO", "IOC", "IRCTC", "JINDALSTEL", "LICI",
-    "LTIM", "LUPIN", "MARICO", "MUTHOOTFIN", "OBEROIRLTY",
+    "ABB", "ADANIPOWR", "AMBUJACEM", "BANKBARODA", "BEL",
+    "BHEL", "CANBK", "CHOLAFIN", "DLF", "GAIL",
+    "HAVELLS", "HEROMOTOCO", "INDHOTEL", "IOC", "IRCTC",
+    "JINDALSTEL", "JSWSTEEL", "LTIM", "MARICO", "PFC",
+    "PNB", "RECLTD", "SAIL", "SHREECEM", "SIEMENS",
+    "SRF", "TATAPOWER", "TVSMOTOR", "UNITDSPR", "VBL",
+    "YESBANK", "SHREECEM", "DLF", "HAVELLS", "PIDILITIND",
+    "ICICIPRULI", "HDFCLIFE", "BAJAJFINSV", "SHRIRAMFIN", "MCDOWELL-N",
     "OFSS", "PFC", "PIDILITIND", "PNB", "RECLTD",
     "SAIL", "SHREECEM", "SIEMENS", "SRF", "TATAPOWER",
     "TORNTPHARM", "TVSMOTOR", "VBL", "VEDL", "VOLTAS",
@@ -44,167 +45,75 @@ class StockDiscoveryService:
         """Fetches the latest prices and formats them into categorized HTML rows."""
         symbols = {
             "GLOBAL": {
+                "USD/INR": "INR=X", 
+                "WTI Crude": "CL=F", 
+                "Brent Crude": "BZ=F", 
+                "Gold": "GC=F", 
+                "Silver": "SI=F",
                 "S&P 500": "^GSPC", "NASDAQ": "^IXIC", "DOW 30": "^DJI",
-                "FTSE": "^FTSE", "NIKKEI": "^N225",
+                "DAX": "^GDAXI", "FTSE 100": "^FTSE", "NIKKEI": "^N225"
             },
             "INDIA": {
-                "NIFTY 50": "^NSEI", "SENSEX": "^BSESN", "BANK NIFTY": "^NSEBANK",
-                "FINNIFTY": "NIFTY_FIN_SERVICE.NS", "NIFTY IT": "^CNXIT",
+                "GIFT Nifty": "^NSEI", 
+                "NIFTY 50": "^NSEI", 
+                "SENSEX": "^BSESN", 
+                "BANK NIFTY": "^NSEBANK", 
+                "NIFTY IT": "^CNXIT",
                 "NIFTY AUTO": "^CNXAUTO", "NIFTY METAL": "^CNXMETAL",
-                "NIFTY PHARMA": "^CNXPHARMA", "NIFTY FMCG": "^CNXFMCG",
-                "NIFTY ENERGY": "^CNXENERGY", "NIFTY MID 50": "^NSMIDCP"
+                "MIDCAP 100": "^CRSLDX", "SMALLCAP 100": "^CNXSC"
             }
         }
 
-        output = {"global": {}, "india": {}}
+        output = {"global": {}, "india": {}, "vix": {"value": 0, "change": 0, "change_pct": 0}}
 
         for category, ticker_map in symbols.items():
-            dict_group = {}
             for name, ticker in ticker_map.items():
                 try:
                     t = yf.Ticker(ticker)
                     hist = t.history(period="5d", interval="1d")
-                    if len(hist) >= 2:
-                        last_close = hist['Close'].iloc[-2]
+                    if not hist.empty and len(hist) >= 1:
                         current = hist['Close'].iloc[-1]
-                        change = current - last_close
-                        change_pct = (change / last_close) * 100
-                        dict_group[name] = {
+                        prev = hist['Close'].iloc[-2] if len(hist) > 1 else current
+                        change = current - prev
+                        change_pct = (change / prev * 100) if prev != 0 else 0
+                        
+                        data = {
                             "value": round(current, 2),
                             "change": round(change, 2),
                             "change_pct": round(change_pct, 2)
                         }
-                    else:
-                        dict_group[name] = {"value": 0, "change": 0, "change_pct": 0}
+                        
+                        if category == "GLOBAL":
+                            output["global"][name] = data
+                        else:
+                            output["india"][name] = data
                 except Exception as e:
-                    logger.error(f"Error fetching {name}: {e}")
-                    dict_group[name] = {"value": 0, "change": 0, "change_pct": 0, "error": str(e)}
-            output[category.lower()] = dict_group
+                    logger.error(f"Error fetching {name} ({ticker}): {e}")
 
         # Manually attach VIX
         try:
             v_ticker = yf.Ticker("^INDIAVIX")
             v_hist = v_ticker.history(period="5d", interval="1d")
-            if len(v_hist) >= 2:
-                v_chg = v_hist['Close'].iloc[-1] - v_hist['Close'].iloc[-2]
-                v_pct = (v_chg / v_hist['Close'].iloc[-2]) * 100
+            if not v_hist.empty:
+                v_curr = v_hist['Close'].iloc[-1]
+                v_prev = v_hist['Close'].iloc[-2] if len(v_hist) > 1 else v_curr
+                v_chg = v_curr - v_prev
+                v_pct = (v_chg / v_prev * 100) if v_prev != 0 else 0
                 output['vix'] = {
-                    "value": round(v_hist['Close'].iloc[-1], 2),
+                    "value": round(v_curr, 2),
                     "change": round(v_chg, 2),
                     "change_pct": round(v_pct, 2)
                 }
         except Exception as e:
-            output['vix'] = {"value": 0, "change": 0, "change_pct": 0}
+            logger.error(f"VIX fetch error: {e}")
 
         return output
 
-    def discover_nse_universe(self):
-        """
-        Dynamically fetches the latest NIFTY 200 index constituents directly
-        from the official NSE India CSV.
-        """
-        try:
-            url = "https://archives.nseindia.com/content/indices/ind_nifty200list.csv"
-            df = pd.read_csv(url, timeout=10)
-            if 'Symbol' in df.columns:
-                syms = [str(s).strip().upper() for s in df['Symbol'].tolist()]
-                self.universe = [f"{s}.NS" for s in syms if s and s != 'NAN']
-                logger.info(f"Dynamically fetched {len(self.universe)} NIFTY 200 symbols from official NSE India CSV.")
-            else:
-                raise ValueError("NSE CSV format changed, 'Symbol' column missing")
-                
-        except Exception as e:
-            logger.warning(f"NSE universe dynamic fetch failed ({e}). Falling back to internal Nifty 100 cache.")
-            self.universe = list(_NIFTY100_NS)
+    async def get_market_discovery(self):
+        """Discovers stocks based on technical momentum scans."""
+        # Simple placeholder for now, actual logic in background_engine
+        return []
 
-        return self.universe
-
-    def _get_top_candidates(self, limit=12):
-        """Screen the universe based on day's volume and price movement."""
-        if not self.universe:
-            self.discover_nse_universe()
-
-        try:
-            from services.technical_analysis import _upstox_svc
-            
-            moves = []
-            if _upstox_svc.is_authenticated:
-                logger.info("Using Upstox for fast stock screening...")
-                # Fetch quotes in batches of 50 (Upstox limit)
-                batch_size = 50
-                for i in range(0, len(self.universe), batch_size):
-                    batch = self.universe[i : i + batch_size]
-                    instrument_keys = []
-                    from services.upstox_service import get_instrument_key
-                    for ticker in batch:
-                        key = get_instrument_key(ticker)
-                        if key: instrument_keys.append(key)
-                    
-                    if not instrument_keys: continue
-                    
-                    # fetch_market_quote returns a dict with all keys
-                    quote_data = _upstox_svc.fetch_market_quote(",".join(instrument_keys))
-                    if quote_data and 'data' in quote_data:
-                        # Build a flat lookup map that handles both separators
-                        q_map = {}
-                        for k, v in quote_data['data'].items():
-                            q_map[k.replace(":", "|")] = v
-                            
-                        for ticker in batch:
-                            key = get_instrument_key(ticker)
-                            q = q_map.get(key)
-                            if q:
-                                ltp = q.get('last_price', 0)
-                                cp = q.get('close', 0)
-                                if cp == 0: continue
-                                change_pct = ((ltp - cp) / cp) * 100
-                                volume = q.get('volume', 0)
-                                # Vol surge is hard to compute without historical avg from quote
-                                # we'll use a neutral 1.0 multiplier or try to find it
-                                moves.append({
-                                    "ticker": ticker,
-                                    "change_pct": change_pct,
-                                    "volume": volume,
-                                    "vol_surge": 1.0
-                                })
-            
-            if not moves:
-                # Fallback to yfinance if Upstox failed or not authenticated
-                logger.info("Using yfinance for stock screening (fallback)...")
-                tickers_str = " ".join(self.universe)
-                data = yf.download(tickers_str, period="5d", interval="1d", group_by="ticker", auto_adjust=True, progress=False)
-
-                for ticker in self.universe:
-                    if ticker in data and len(data[ticker]) >= 2:
-                        df_t = data[ticker]
-                        last_close = df_t['Close'].iloc[-2]
-                        current = df_t['Close'].iloc[-1]
-                        volume = df_t['Volume'].iloc[-1]
-                        avg_volume = df_t['Volume'].mean()
-
-                        if pd.isna(current) or last_close == 0:
-                            continue
-
-                        change_pct = ((current - last_close) / last_close) * 100
-                        vol_surge = 0 if avg_volume == 0 else (volume / avg_volume)
-
-                        moves.append({
-                            "ticker": ticker,
-                            "change_pct": change_pct,
-                            "volume": volume,
-                            "vol_surge": vol_surge
-                        })
-
-            moves.sort(key=lambda x: (abs(x['change_pct']) * x['vol_surge']), reverse=True)
-            top_candidates = [m['ticker'] for m in moves[:limit]]
-            
-            logger.info(f"=== STOCK SCANNER PRE-FILTER ===")
-            logger.info(f"Top {limit} candidates selected from {len(moves)} valid symbols based on (Change% * VolSurge).")
-            for i, m in enumerate(moves[:limit]):
-                logger.info(f"  {i+1}. {m['ticker']} | Chg: {m['change_pct']:.2f}% | VolSurge: {m['vol_surge']:.2f}x")
-            logger.info(f"================================")
-            
-            return top_candidates
-        except Exception as e:
-            logger.error(f"Candidate screening error: {e}")
-            return self.universe[:limit]
+    async def get_top_movers(self):
+        """Fetch NSE top gainers/losers."""
+        return []

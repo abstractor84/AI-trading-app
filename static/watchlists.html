@@ -244,7 +244,7 @@
                 const dashTitle = isDash ? 'Remove from Dashboard' : 'Add to Dashboard';
 
                 div.innerHTML = `
-                    <span>${ticker}</span>
+                    <span class="clickable-ticker" onclick="window.location.href='/?ticker=${ticker}'">${ticker}</span>
                     <div style="display:flex; gap: 10px;">
                         <button title="${dashTitle}" style="color:${dashColor};" onclick="toggleDashboardStock('${ticker}')">${dashIcon}</button>
                         <button title="Remove from Watchlist" onclick="removeStock(${wlId}, '${ticker}', '${containerId}')">✖</button>

@@ -105,15 +105,17 @@ def test_fallback_yesterday_data(sample_df):
 
 def test_n_forecast_fallback(sample_df):
     """Test minimum forecast window when time is after market close."""
-    # Mock datetime.now() to be 4 PM
-    class MockDatetime:
-        @classmethod
-        def now(cls):
-            return datetime.now().replace(hour=16, minute=0)
-    
-    with patch("services.price_projector.datetime", MockDatetime):
+    # Mock datetime.now() to be 4 PM (past close)
+    with patch("services.price_projector.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime.now().replace(hour=16, minute=0)
+        # Should use minimum fallback window if n_forecast is None
         result = price_projector.generate_projection(sample_df)
-        assert len(result["projection"]) == 30 # Default fallback
+        assert len(result["projection"]) == 30 
+
+def test_explicit_n_forecast(sample_df):
+    """Test that explicit n_forecast is respected."""
+    result = price_projector.generate_projection(sample_df, n_forecast=50)
+    assert len(result["projection"]) == 50
 
 def test_arima_exception(sample_df):
     """Test ARIMA exception handling."""

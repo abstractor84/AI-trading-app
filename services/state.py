@@ -31,15 +31,17 @@ class AppState:
         self.capital = 100000.0
         self.max_loss_per_trade = 1000.0
         self.max_daily_loss = 5000.0
-        self.search_engine = "ddgs"
-        self.data_provider = "yfinance"
-        self.search_fallback = False
-        self.auto_refresh = True
+        self.search_engine = "tavily"
+        self.data_provider = "upstox"
+        self.fallback_data = True
+        self.fallback_search = True
+        self.fallback_ai = True
         self.ai_provider = "google"
         self.ai_model = "gemini-3.1-pro"
 
         # AI Advisor state (V2)
         self.ai_advisor_message = None  # Current AI guidance
+        self.ai_scans_today = []        # Store last 50 recommendations for historical analysis
         self.action_timeline = []  # Chronological log of events
 
         self._load_from_db()
@@ -55,8 +57,9 @@ class AppState:
                 self.max_daily_loss = getattr(settings, 'max_daily_loss', 5000.0)
                 self.search_engine = settings.search_engine
                 self.data_provider = settings.data_provider
-                self.search_fallback = settings.search_fallback
-                self.auto_refresh = settings.auto_refresh
+                self.fallback_data = getattr(settings, 'fallback_data', True)
+                self.fallback_search = getattr(settings, 'fallback_search', True)
+                self.fallback_ai = getattr(settings, 'fallback_ai', True)
                 self.ai_provider = settings.ai_provider
                 self.ai_model = settings.ai_model
 
@@ -108,12 +111,36 @@ class AppState:
         }
 
     def check_daily_reset(self):
-        """Reset state if it's a new day in IST."""
+        """Reset state if it's a new day in IST. Saves summary before wiping."""
         import pytz
+        from models import DailySummary
+        from database import SessionLocal
         ist = pytz.timezone("Asia/Kolkata")
         current_date = datetime.now(ist).date()
         if current_date > self.last_reset_date:
-            logger.info("Midnight (IST) passed, resetting daily trade state...")
+            logger.info(f"Midnight (IST) passed: {current_date} > {self.last_reset_date}. Saving summary...")
+            
+            # Save Summary
+            total_pnl = sum(t.get('pnl', 0) for t in self.closed_trades)
+            wins = sum(1 for t in self.closed_trades if t.get('pnl', 0) > 0)
+            losses = sum(1 for t in self.closed_trades if t.get('pnl', 0) < 0)
+            
+            with SessionLocal() as db:
+                try:
+                    summary = db.query(DailySummary).filter(DailySummary.date == self.last_reset_date).first()
+                    if not summary:
+                        summary = DailySummary(date=self.last_reset_date)
+                        db.add(summary)
+                    
+                    summary.total_trades = len(self.closed_trades)
+                    summary.wins = wins
+                    summary.losses = losses
+                    summary.total_pnl = total_pnl
+                    db.commit()
+                except Exception as e:
+                    logger.error(f"Daily summary save failed: {e}")
+                    db.rollback()
+
             self.open_trades.clear()
             self.closed_trades.clear()
             self.standard_ai_signals.clear()
@@ -124,15 +151,17 @@ class AppState:
             self.last_reset_date = current_date
 
     def update_settings(self, capital: float, max_loss: float,
-                        search_engine: str = 'ddgs', data_provider: str = 'yfinance',
-                        search_fallback: bool = False, auto_refresh: bool = True,
-                        ai_provider: str = 'google', ai_model: str = 'gemini-2.5-flash'):
+                        search_engine: str = 'tavily', data_provider: str = 'upstox',
+                        fallback_data: bool = True, fallback_search: bool = True,
+                        fallback_ai: bool = True,
+                        ai_provider: str = 'google', ai_model: str = 'gemini-3.1-pro'):
         self.capital = capital
         self.max_loss_per_trade = max_loss
         self.search_engine = search_engine
         self.data_provider = data_provider
-        self.search_fallback = search_fallback
-        self.auto_refresh = auto_refresh
+        self.fallback_data = fallback_data
+        self.fallback_search = fallback_search
+        self.fallback_ai = fallback_ai
         self.ai_provider = ai_provider
         self.ai_model = ai_model
 
@@ -146,8 +175,9 @@ class AppState:
             settings.max_loss_per_trade = max_loss
             settings.search_engine = search_engine
             settings.data_provider = data_provider
-            settings.search_fallback = search_fallback
-            settings.auto_refresh = auto_refresh
+            settings.fallback_data = fallback_data
+            settings.fallback_search = fallback_search
+            settings.fallback_ai = fallback_ai
             settings.ai_provider = ai_provider
             settings.ai_model = ai_model
             db.commit()
@@ -190,8 +220,11 @@ class AppState:
 
     def close_trade(self, trade_id: str, exit_price: float):
         """Close an open trade and move it to closed list."""
+        tid_str = str(trade_id)
+        logger.info(f"SKEPTIC: Finalizing trade exit for ID: {tid_str} @ ₹{exit_price}")
+        
         with SessionLocal() as db:
-            trade = db.query(Trade).filter(Trade.id == trade_id).first()
+            trade = db.query(Trade).filter(Trade.id == tid_str).first()
             if trade:
                 if trade.action == "BUY":
                     pnl = (exit_price - trade.entry_price) * trade.quantity
@@ -205,19 +238,23 @@ class AppState:
                 db.commit()
                 db.refresh(trade)
 
-                # Update in-memory state
-                self.open_trades = [t for t in self.open_trades if t['id'] != trade_id]
+                # Update in-memory state: Filter MUST be string-to-string to prevent integer mismatches
+                before = len(self.open_trades)
+                self.open_trades = [t for t in self.open_trades if str(t.get('id')) != tid_str]
                 self.closed_trades.append(self._to_dict(trade))
+                logger.info(f"SKEPTIC: Memory sync complete. (Open: {before} -> {len(self.open_trades)})")
 
                 # Add to action timeline
                 self.action_timeline.append({
                     "time": datetime.now().strftime("%H:%M:%S"),
                     "type": "TRADE_CLOSE",
                     "message": (
-                        f"Closed {trade.ticker} @ ₹{exit_price:.2f} | "
+                        f"SUCCESS: Closed {trade.ticker} @ ₹{exit_price:.2f} | "
                         f"P&L: ₹{trade.pnl:.2f}"
                     )
                 })
+            else:
+                logger.error(f"SKEPTIC: ID {tid_str} not found in DB. Logic sync failure.")
 
     def add_dashboard_stock(self, ticker: str):
         self.dashboard_watch_stocks.add(ticker)

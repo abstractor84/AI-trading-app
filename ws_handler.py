@@ -6,6 +6,7 @@ Extracted from the monolithic main.py for clean separation of concerns.
 import json
 import asyncio
 import logging
+import pandas as pd
 from datetime import datetime
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -84,11 +85,13 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     float(command.get('max_loss', state.max_loss_per_trade)),
                     command.get('search_engine', state.search_engine),
                     command.get('data_provider', state.data_provider),
-                    command.get('search_fallback', state.search_fallback),
-                    command.get('auto_refresh', getattr(state, 'auto_refresh', True)),
+                    command.get('fallback_data', getattr(state, 'fallback_data', True)),
+                    command.get('fallback_search', getattr(state, 'fallback_search', True)),
+                    command.get('fallback_ai', getattr(state, 'fallback_ai', True)),
                     command.get('ai_provider', getattr(state, 'ai_provider', 'google')),
-                    command.get('ai_model', getattr(state, 'ai_model', 'gemini-2.5-flash'))
+                    command.get('ai_model', getattr(state, 'ai_model', 'gemini-3.1-pro'))
                 )
+
                 # Sync risk engine with new settings
                 risk_engine.update_config(
                     state.capital,
@@ -97,6 +100,16 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 )
                 await manager.send_state(websocket, state)
 
+            elif action == "list_models":
+                provider = command.get("provider", "google")
+                from services.ai_scorer import ai_advisor
+                models = await asyncio.to_thread(ai_advisor.list_available_models, provider)
+                await websocket.send_json({
+                    "type": "model_list",
+                    "provider": provider,
+                    "data": models
+                })
+
             elif action == "get_status":
                 from services.technical_analysis import TechnicalAnalysisService
                 ta_svc = TechnicalAnalysisService()
@@ -104,6 +117,59 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 await manager.broadcast({
                     "type": "connection_status",
                     "status": status
+                })
+
+            elif action == "get_trade_history":
+                from database import SessionLocal
+                from models import Trade
+                from datetime import datetime, timedelta
+                
+                days = int(command.get("days", 90))
+                cutoff = datetime.now() - timedelta(days=days)
+                
+                with SessionLocal() as db:
+                    trades = db.query(Trade).filter(
+                        Trade.status == "CLOSED",
+                        Trade.close_time >= cutoff
+                    ).order_by(Trade.close_time.desc()).all()
+                    
+                    history = []
+                    for t in trades:
+                        history.append({
+                            "id": t.id,
+                            "ticker": t.ticker,
+                            "action": t.action,
+                            "quantity": t.quantity,
+                            "entry_price": t.entry_price,
+                            "exit_price": t.exit_price,
+                            "pnl": t.pnl,
+                            "close_time": t.close_time.strftime("%Y-%m-%d %H:%M") if t.close_time else "Unknown"
+                        })
+                        
+                await websocket.send_json({
+                    "type": "trade_history_90d",
+                    "data": history
+                })
+
+            elif action == "get_ai_history":
+                from database import SessionLocal
+                from models import AIInteraction
+                with SessionLocal() as db:
+                    scans = db.query(AIInteraction).filter(
+                        AIInteraction.prompt_type == "SCAN"
+                    ).order_by(AIInteraction.timestamp.desc()).limit(20).all()
+                    
+                    history = []
+                    for s in scans:
+                        history.append({
+                            "id": s.id,
+                            "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                            "model_used": s.model_used,
+                            "output_json": s.output_json
+                        })
+                await websocket.send_json({
+                    "type": "ai_history_update",
+                    "data": history
                 })
 
             elif action == "log_trade":
@@ -196,12 +262,53 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 })
 
             elif action == "trigger_scan":
+                # V3 Skeptic Audit: Implement 60s cooldown to prevent quota exhaustion
+                import time
+                last_scan = getattr(state, '_last_manual_scan_time', 0)
+                if time.time() - last_scan < 60:
+                    await websocket.send_json({
+                        "type": "notification",
+                        "message": f"Scan cooldown active. Wait {int(60 - (time.time() - last_scan))}s.",
+                        "level": "warning"
+                    })
+                    return
+                
+                state._last_manual_scan_time = time.time()
                 # Enriched scan: TA → AI picks → enrich each pick with full data
                 await manager.broadcast({
                     "type": "notification",
                     "message": "🔍 Scanning market... (this takes ~30s)",
                     "level": "info"
                 })
+
+                import os
+                if os.getenv("SIMULATION", "false").lower() == "true":
+                    mock_picks = [{
+                        "ticker": "RELIANCE.NS",
+                        "action": "BUY",
+                        "current_price": 2500,
+                        "signal": "STRONG BUY",
+                        "confidence": 85,
+                        "reasoning": "Simulation mode: Mocked trade candidate for RELIANCE.",
+                        "live_price": 2500.0,
+                        "ta_data": {
+                            "rsi_14": 45.0, 
+                            "macd_hist": 2.5, 
+                            "adx_14": 30.0, 
+                            "vwap": 2490.0, 
+                            "vol_surge": 1.5, 
+                            "ema_9": 2510.0, 
+                            "ema_21": 2480.0,
+                            "lz_score": 0.8
+                        },
+                        "risk_levels": {"stop_loss": 2480.0, "target_1": 2540.0, "target_2": 2560.0, "quantity": 10},
+                        "fundamentals": {"sector": "Energy", "market_cap": "17T"},
+                        "sentiment": {"score": 60, "label": "Bullish", "headline_count": 5},
+                        "atr": 10.0
+                    }]
+
+                    await manager.broadcast({"type": "scan_results", "data": mock_picks})
+                    continue
 
                 try:
                     from services.technical_analysis import TechnicalAnalysisService
@@ -262,9 +369,21 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                         logger.info(f"Passing {len(candidates)} mathematically validated Candidates to AI Scorer...")
                         ai_picks = await asyncio.to_thread(
                             ai_advisor.scan_market, candidates,
-                            state.global_context, phase_ctx, provider, model
+                            state.global_context, phase_ctx, provider, model,
+                            ai_fallback=getattr(state, 'fallback_ai', True)
                         )
 
+                        # Update state for persistent view
+                        import datetime
+                        scan_entry = {"type": "SCAN", "result": ai_picks, "timestamp": datetime.datetime.now().strftime("%H:%M:%S")}
+                        state.ai_advisor_message = scan_entry
+                        state.ai_scans_today.insert(0, scan_entry)
+                        state.ai_scans_today = state.ai_scans_today[:50]
+
+                        await manager.broadcast({
+                            "type": "scan_results",
+                            "data": ai_picks
+                        })
                     # Step 3: Enrich each AI pick with full data
                     enriched_picks = []
                     if isinstance(ai_picks, list):
@@ -498,32 +617,35 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     })
 
             elif action == "get_chart_data":
-                # Fetch OHLCV + generate projection
                 try:
                     from services.technical_analysis import TechnicalAnalysisService
-                    from services.price_projector import price_projector
-
+                    from services.upstox_streamer import get_streamer
+                    from services.upstox_service import get_instrument_key
+                    
                     ta_svc = TechnicalAnalysisService()
-                    ticker = command.get('ticker', '')
+                    ticker = command.get('ticker', 'RELIANCE.NS')
+                    interval = command.get('interval', '5m')
 
-                    df = await asyncio.to_thread(
-                        ta_svc.fetch_ohlcv, ticker, "1d", "1m"
-                    )
-
-                    if df is None or df.empty:
-                        # Fallback to 5-min data
-                        df = await asyncio.to_thread(
-                            ta_svc.fetch_ohlcv, ticker, "5d", "5m"
-                        )
-
-                    result = await asyncio.to_thread(
-                        price_projector.generate_projection, df, 1
+                    payload = await asyncio.to_thread(
+                        ta_svc.get_chart_payload, ticker, interval
                     )
 
                     await websocket.send_json({
                         "type": "chart_data",
-                        "data": result
+                        "data": payload
                     })
+
+                    inst_key = get_instrument_key(ticker)
+                    if inst_key:
+                        # Tick callback broadcasts to all connected clients
+                        async def tick_callback(tick):
+                            await manager.broadcast({
+                                "type": "tick",
+                                "data": tick
+                            })
+
+                        # Unsubscribe from previous if any (simplified)
+                        get_streamer(tick_callback).subscribe([inst_key])
 
                 except Exception as e:
                     logger.error(f"Chart data error: {e}", exc_info=True)

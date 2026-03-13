@@ -26,9 +26,19 @@ class LorentzianClassifier:
         if df.empty or len(df) < 50: return None
         try:
             features = pd.DataFrame(index=df.index)
-            features['rsi'] = ta.rsi(df['Close'], length=14)
-            features['cci'] = ta.cci(df['High'], df['Low'], df['Close'], length=20)
+            rsi = ta.rsi(df['Close'], length=14)
+            if rsi is None or rsi.empty:
+                logger.warning("RSI calculation failed")
+            features['rsi'] = rsi
+            
+            cci = ta.cci(df['High'], df['Low'], df['Close'], length=20)
+            if cci is None or cci.empty:
+                logger.warning("CCI calculation failed")
+            features['cci'] = cci
+            
             adx_df = ta.adx(df['High'], df['Low'], df['Close'], length=14)
+            if adx_df is None or adx_df.empty:
+                logger.warning("ADX calculation failed")
             features['adx'] = adx_df['ADX_14'] if adx_df is not None else 20
             
             ap = (df['High'] + df['Low'] + df['Close']) / 3
@@ -101,9 +111,10 @@ class LorentzianClassifier:
         st_dir = features['st_dir'].iloc[-1]
 
         signal = "NEUTRAL"
-        if score >= signal_threshold and current_close > ema50 and st_dir == 1:
+        adx = features['adx'].iloc[-1]
+        if score >= signal_threshold and current_close > ema50 and st_dir == 1 and adx > 20:
             signal = "BUY"
-        elif score <= -signal_threshold and current_close < ema50 and st_dir == -1:
+        elif score <= -signal_threshold and current_close < ema50 and st_dir == -1 and adx > 20:
             signal = "SHORT SELL"
 
         return {
@@ -176,6 +187,7 @@ class LorentzianClassifier:
         
         ema50 = features['ema50'].values
         st_dir = features['st_dir'].values
+        adx = features['adx'].values
         
         for i, feat_pos in enumerate(range(feat_start_idx, len(features))):
             neigh_idx = neighbor_indices[i]
@@ -185,8 +197,8 @@ class LorentzianClassifier:
             score = np.sum(scores) / np.sum(weights) if np.sum(weights) > 0 else 0
             
             signal = 0
-            if score >= threshold and closes[feat_pos] > ema50[feat_pos] and st_dir[feat_pos] == 1: signal = 1
-            elif score <= -threshold and closes[feat_pos] < ema50[feat_pos] and st_dir[feat_pos] == -1: signal = -1
+            if score >= threshold and closes[feat_pos] > ema50[feat_pos] and st_dir[feat_pos] == 1 and adx[feat_pos] > 20: signal = 1
+            elif score <= -threshold and closes[feat_pos] < ema50[feat_pos] and st_dir[feat_pos] == -1 and adx[feat_pos] > 20: signal = -1
             
             results.append({
                 "time": int(indices[feat_pos].timestamp()),

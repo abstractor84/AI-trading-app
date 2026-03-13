@@ -61,6 +61,7 @@ def test_run_strategy_tp_hits():
         bt.df["RSI_14"] = [30]*10 + [70]*10
         bt.df["VWAP"] = [90]*10 + [120]*10
         bt.df["Date"] = bt.df.index.date
+        bt.df["LZ_Signal"] = [1]*10 + [-1]*10
     bt._prepare_indicators = mock_prepare
     params = {"ema_fast": 9, "ema_slow": 21, "rsi_len": 14, "sl_pct": 0.1, "tp_pct": 0.05}
     metrics = bt.run_strategy(params)
@@ -102,6 +103,7 @@ def test_run_strategy_with_real_trades():
         bt.df["RSI_14"] = [30]*10 + [30]*10 + [70]*10
         bt.df["VWAP"] = [100]*30
         bt.df["Date"] = bt.df.index.date
+        bt.df["LZ_Signal"] = [1]*10 + [0]*10 + [-1]*10
         
     bt._prepare_indicators = mock_prepare
     

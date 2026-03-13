@@ -57,10 +57,11 @@ def test_daily_reset(mock_db):
     state.last_reset_date = datetime.now().date() - timedelta(days=1)
     
     with patch.object(state, '_load_from_db') as mock_load:
+        target_date = state.last_reset_date
         state.check_daily_reset()
         
         # Verify summary was saved
-        summary = mock_db.query(DailySummary).first()
+        summary = mock_db.query(DailySummary).filter_by(date=target_date).first()
         assert summary is not None
         assert summary.total_trades == 1
         assert summary.total_pnl == 1000.0

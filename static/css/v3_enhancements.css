@@ -1,0 +1,93 @@
+
+/* ─── V3 Chart & History Enhancements ────────────────── */
+#chart-container {
+    background: #0b0e11;
+    border-radius: 8px 8px 0 0;
+    overflow: hidden;
+    position: relative;
+}
+
+#adx-container {
+    background: #0b0e11;
+    border-radius: 0 0 8px 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.history-summary-stats {
+    display: flex;
+    gap: 20px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px 15px;
+    border-radius: 6px;
+    margin-bottom: 15px;
+}
+
+.h-stat {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+}
+
+.h-stat strong {
+    color: var(--text-primary);
+    margin-left: 5px;
+}
+
+.clickable-ticker {
+    color: var(--accent);
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.clickable-ticker:hover {
+    text-decoration: underline;
+}
+
+.alert-box {
+    padding: 12px;
+    border-radius: 6px;
+    margin: 10px 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.alert-box.danger {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+}
+
+.fallback-toggle {
+    display: flex;
+    align-items: center; gap: 8px; font-size: 0.85rem; color: var(--text-secondary); margin-top: 4px; cursor: pointer;
+}
+
+.fallback-toggle input {
+    width: 14px !important; height: 14px !important;
+}
+
+.bt-summary-card {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+    background: var(--bg-card);
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.bt-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.bt-stat span {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.bt-stat strong {
+    font-size: 1.2rem;
+    color: var(--text-primary);
+}

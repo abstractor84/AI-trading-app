@@ -15,7 +15,9 @@ class SentinelService:
     CRITICAL_KEYWORDS = {
         "tender", "order", "win", "contract", "awarded", "merger", "acquisition",
         "probe", "fraud", "scam", "penalty", "default", "bankruptcy", "crash",
-        "plunge", "surge", "acquisition", "takeover", "regulatory", "ban"
+        "plunge", "surge", "acquisition", "takeover", "regulatory", "ban",
+        "war", "tariff", "tariffs", "sanctions", "politics", "global", "shock", "elections",
+        "inflation", "gdp", "rbi", "fed", "recession", "stimulus", "interest", "rate"
     }
 
     def __init__(self):
@@ -37,7 +39,7 @@ class SentinelService:
                 
                 # Check if news is cached (avoid redundant triggers for same news)
                 cached = self._news_cache.get(ticker, [])
-                new_headlines = [h for h in headlines_with_links if h['title'] not in [c['title'] for c in cached]]
+                new_headlines = [h for h in headlines_with_links if h.get('title', '') not in [c.get('title', '') for c in cached]]
                 self._news_cache[ticker] = headlines_with_links
                 
                 if not new_headlines:
@@ -49,13 +51,13 @@ class SentinelService:
                         "type": "news_update",
                         "data": {
                             "ticker": ticker,
-                            "headlines": [{"title": h['title'], "url": h['link'], "sentiment": "Neutral", "time": "Just now"} for h in headlines_with_links]
+                            "headlines": [{"title": self._safe_get(h, ['title', 'text']), "url": self._safe_get(h, ['url', 'link', 'href']), "sentiment": "Neutral", "time": "Just now"} for h in headlines_with_links]
                         }
                     })
 
                 for item in new_headlines:
-                    title = item['title']
-                    url = item['link']
+                    title = item.get('title', '')
+                    url = item.get('url', '')
                     found_keywords = self._check_keywords(title)
                     if found_keywords:
                         # Local Appraisal before calling AI
@@ -123,53 +125,109 @@ class SentinelService:
             logger.error(f"Local appraisal failed for {ticker}: {e}")
             
         return False
-    async def check_alerts(self, open_trades, manager=None):
-        """
-        Scan news for all open positions and identify critical alerts.
-        Optionally broadcasts to the manager if provided.
-        """
-        if not open_trades:
-            return []
+    def _safe_get(self, item, keys, default=""):
+        if not isinstance(item, dict): return default
+        for k in keys:
+            if k in item: return item[k]
+        return default
 
-        alerts = []
-        for trade in open_trades:
-            ticker = trade['ticker']
-            clean_ticker = ticker.replace(".NS", "")
+    async def check_alerts(self, open_trades, watchlist_tickers, state, manager=None):
+        """
+        Dual-mode News Sentinel:
+        1. WITH POSITION: High-priority monitoring for open trades (Macro/Sector/Ticker).
+        2. WITHOUT POSITION: Opportunity scanning for watchlist stocks.
+        """
+        all_news = []
+        
+        # ─── MODE 1: WITH POSITION (High-Priority) ───────────────────
+        if open_trades:
+            pos_tickers = [t['ticker'].replace('.NS', '') for t in open_trades]
+            # Combined query for speed and context
+            pos_query = f"({' OR '.join(pos_tickers)}) (stock news OR breaking OR results OR alert)"
+            macro_query = "India market (war OR tariff OR sanctions OR politics OR global shock OR RBI OR Fed)"
             
-            try:
-                query = f"{clean_ticker} stock news breaking"
-                headlines_with_links = await self._fetch_headlines_with_links(query)
-                
-                for item in headlines_with_links:
-                    title = item['title']
-                    url = item['link']
+            for q in [pos_query, macro_query]:
+                results = await self._fetch_news(q, state, manager)
+                logger.info(f"Sentinel: Fetched {len(results)} items for query '{q}'")
+                for item in results:
+                    title = self._safe_get(item, ['title', 'text'])
+                    url = self._safe_get(item, ['url', 'link', 'href'])
                     found_keywords = self._check_keywords(title)
+                    
+                    # Always add to the unified news feed
+                    headline = {
+                        "ticker": "POSITIONS" if q == pos_query else "MACRO",
+                        "title": title,
+                        "url": url,
+                        "sentiment": "Negative" if any(k in ["crash", "plunge", "sanctions", "war", "fraud"] for k in found_keywords) else "Bullish" if any(k in ["order", "win", "win", "surge"] for k in found_keywords) else "Neutral",
+                        "time": "Just now"
+                    }
+                    all_news.append(headline)
+
                     if found_keywords:
                         alert = {
-                            "type": "CRITICAL_ALERT",
-                            "ticker": ticker,
+                            "ticker": "CRITICAL",
                             "title": title,
                             "url": url,
-                            "keywords": list(found_keywords),
-                            "timestamp": datetime.now().strftime("%H:%M:%S"),
-                            "level": "danger" if any(k in ["probe", "fraud", "penalty", "crash"] for k in found_keywords) else "success"
+                            "priority": "HIGH",
+                            "sentiment": headline["sentiment"],
+                            "time": "Just now"
                         }
-                        alerts.append(alert)
-                        logger.warning(f"SENTINEL ALERT for {ticker}: {title}")
-                        
                         if manager:
-                            await manager.broadcast(alert)
-                        break 
-                        
-            except Exception as e:
-                logger.error(f"Sentinel check failed for {ticker}: {e}")
+                            await manager.broadcast({"type": "sentinel_alert", "data": alert})
 
-        return alerts
+        # ─── MODE 2: WITHOUT POSITION (Opportunity Scan) ─────────────
+        watchlist = [t.replace('.NS', '') for t in watchlist_tickers if t not in [p['ticker'] for p in open_trades]]
+        if watchlist:
+            watch_query = f"({' OR '.join(watchlist[:5])}) stock news breaking OR surge OR order"
+            results = await self._fetch_news(watch_query, state, manager)
+            for item in results:
+                title = self._safe_get(item, ['title', 'text'])
+                url = self._safe_get(item, ['url', 'link', 'href'])
+                found_keywords = self._check_keywords(title)
+                
+                all_news.append({
+                    "ticker": "WATCHLIST",
+                    "title": title,
+                    "url": url,
+                    "sentiment": "Bullish" if any(k in ["order", "win", "contract", "surge"] for k in found_keywords) else "Neutral",
+                    "time": "Recent"
+                })
+        
+        # Broadcast the unified feed to the Sentinel UI component
+        if manager and all_news:
+            await manager.broadcast({
+                "type": "news_update",
+                "data": {"headlines": all_news}
+            })
+        
+        return all_news
+
+    async def _fetch_news(self, query: str, state=None, manager=None):
+        """
+        Sentinel news scanning MUST always use DDGS (Free/Unlimited).
+        """
+        try:
+            return await self._fetch_ddgs(query)
+        except Exception as e:
+            logger.error(f"Sentinel news fetch error (DDGS): {e}")
+            if manager:
+                asyncio.create_task(manager.broadcast({
+                    "type": "notification",
+                    "message": "🛡️ Sentinel: News feed temporarily unavailable.",
+                    "level": "error"
+                }))
+            return []
+
+    async def _fetch_ddgs(self, query: str):
+        with DDGS() as ddgs:
+            results = list(ddgs.news(query, region="in-en", max_results=5))
+            return [{"title": r.get('title', ''), "url": r.get('url', '')} for r in results]
 
     async def _fetch_headlines(self, query: str) -> list:
         """Fetch latest news titles (legacy compatibility)."""
         res = await self._fetch_headlines_with_links(query)
-        return [h['title'] for h in res]
+        return [h.get('title', '') for h in res]
 
     async def _fetch_headlines_with_links(self, query: str) -> list:
         """Fetch latest news titles and links via DDGS."""
@@ -177,7 +235,7 @@ class SentinelService:
             def get_news():
                 with DDGS() as ddgs:
                     results = list(ddgs.news(query, max_results=5))
-                    return [{"title": r['title'], "link": r['link']} for r in results]
+                    return [{"title": r.get('title', ''), "url": r.get('url', r.get('link', ''))} for r in results]
             
             return await asyncio.to_thread(get_news)
         except Exception as e:

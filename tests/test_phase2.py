@@ -89,9 +89,9 @@ def test_ai_fallback_enabled(mock_log, mock_quota):
     ai = AIAdvisorService()
     
     with patch.object(ai, "_call_google") as mock_call_google:
-        # Mock Google AI to throw 429 on 'gemini-2.5-pro', but succeed on 'gemini-2.5-flash'
+        # Mock Google AI to throw 429 on 'gemini-2.5-pro', but succeed on 'gemini-2.0-flash'
         def side_effect(model_name, prompt):
-            if model_name != "gemini-2.5-flash":
+            if model_name != "gemini-2.0-flash":
                 raise Exception("429 Too Many Requests")
             return [{"ticker": "RELIANCE.NS", "action": "BUY"}]
             
@@ -100,7 +100,7 @@ def test_ai_fallback_enabled(mock_log, mock_quota):
         # Call with fallback enabled (default)
         result = ai._call_ai("Test Prompt", "SCAN", "google", "gemini-2.5-pro", ai_fallback=True)
         
-        # Verify it successfully fell back to gemini-2.5-flash
+        # Verify it successfully fell back to gemini-2.0-flash
         assert isinstance(result, list)
         assert len(result) == 1
         assert result[0]["ticker"] == "RELIANCE.NS"

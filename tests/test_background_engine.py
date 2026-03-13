@@ -32,7 +32,7 @@ async def test_update_open_trades(bg_engine, state):
         }
     ]
     
-    phase_ctx = {"phase": MarketPhase.MID_MORNING_TREND, "mins_to_close": 120}
+    phase_ctx = {"phase": MarketPhase.MID_SESSION, "mins_to_close": 120}
     
     # Mock ta_svc.fetch_ohlcv
     with patch("background_engine.ta_svc.fetch_ohlcv") as mock_fetch:

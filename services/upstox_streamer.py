@@ -35,15 +35,15 @@ class UpstoxLiveStream:
         self.subscribed_keys = set()
         
     def _get_authorized_ws_url(self):
-        """Fetches the authorized WebSocket URL from Upstox REST API."""
+        """Fetches the authorized WebSocket URL from Upstox REST API (V3)."""
         if not self.upstox_service.is_authenticated:
             return None
             
-        url = "https://api.upstox.com/v2/feed/market-data-feed/authorize"
+        url = "https://api.upstox.com/v3/feed/market-data-feed/authorize"
         try:
             resp = requests.get(url, headers=self.upstox_service._headers(), timeout=5)
             if resp.status_code == 200:
-                return resp.json().get("data", {}).get("authorizedRedirectUri")
+                return resp.json().get("data", {}).get("authorized_redirect_uri")
             else:
                 logger.error(f"Upstox WS Auth Error: {resp.text}")
         except Exception as e:
@@ -215,8 +215,13 @@ class UpstoxLiveStream:
 
 upstox_streamer = None
 
-def get_streamer(callback):
+def get_streamer(callback=None):
     global upstox_streamer
     if upstox_streamer is None:
+        # Default callback if none provided
+        if callback is None:
+            async def default_cb(tick):
+                logging.debug(f"Tick received (no handler): {tick}")
+            callback = default_cb
         upstox_streamer = UpstoxLiveStream(callback)
     return upstox_streamer

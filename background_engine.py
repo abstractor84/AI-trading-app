@@ -13,6 +13,7 @@ from services.risk_engine import risk_engine
 from services.projection_mapper import projection_svc
 from services.technical_analysis import TechnicalAnalysisService
 from services.stock_discovery import StockDiscoveryService
+from services.sentinel_service import sentinel_svc
 from services.ai_scorer import ai_advisor
 
 logger = logging.getLogger(__name__)
@@ -78,12 +79,23 @@ class BackgroundEngine:
                 if self.state.open_trades:
                     await self._update_open_trades(phase_ctx)
 
+                # Sentinel Risk Guard (Unified alert/opportunity scan)
+                watchlist = list(self.state.dashboard_watch_stocks)
+                await sentinel_svc.check_alerts(self.state.open_trades, watchlist, self.state, self.manager)
+
                 # ─── Step 3: Phase-specific AI calls ────────────────────
                 if phase_ctx["is_trading_hours"]:
                     await self._maybe_call_ai(phase_ctx)
 
                 # ─── Step 4: Broadcast full state to all clients ────────
                 await self._broadcast_state(phase_ctx)
+                
+                # Periodically broadcast recommendations
+                if datetime.now().minute % 10 == 0:
+                    await self.manager.broadcast({
+                        "type": "recommendations",
+                        "data": [{"ticker": ticker, "action": "BUY", "reason": "High Momentum"} for ticker in list(self.state.dashboard_watch_stocks)[:5]]
+                    })
 
                 # ─── Step 5: Phase transition notifications ─────────────
                 if phase_ctx["transitioned"]:
@@ -228,7 +240,8 @@ class BackgroundEngine:
                 logger.info(f"Passing {len(candidates)} mathematically validated Candidates to AI Scorer...")
                 raw_result = await asyncio.to_thread(
                     ai_advisor.scan_market, candidates,
-                    self.state.global_context, phase_ctx, provider, model
+                    self.state.global_context, phase_ctx, provider, model,
+                    ai_fallback=getattr(self.state, 'fallback_ai', True)
                 )
                 
                 # Enrich results
@@ -336,7 +349,8 @@ class BackgroundEngine:
             elif prompt_type == "POSITION_REVIEW":
                 raw_result = await asyncio.to_thread(
                     ai_advisor.review_positions, self.state.open_trades,
-                    self.state.global_context, phase_ctx, provider, model
+                    self.state.global_context, phase_ctx, provider, model,
+                    ai_fallback=getattr(self.state, 'fallback_ai', True)
                 )
                 
                 result = []
@@ -429,26 +443,30 @@ class BackgroundEngine:
             "market_phase": phase_ctx,
             "ai_calls_today": __import__('services.quota_service').quota_service.quota_svc.get_total_daily_usage(),
             "ai_calls_limit": 20,
-            "ai_advisor": self.state.ai_advisor_message,
+            "ai_advisor": getattr(self.state, 'ai_advisor_message', None),
+            "ai_scans_today": getattr(self.state, 'ai_scans_today', []),
             "connection_status": getattr(self.state, 'connection_status', {}),
-            "action_timeline": self.state.action_timeline[-20:],  # Last 20 events
-            "search_engine": getattr(self.state, 'search_engine', 'ddgs'),
-            "data_provider": getattr(self.state, 'data_provider', 'yfinance'),
-            "search_fallback": getattr(self.state, 'search_fallback', False),
-            "auto_refresh": getattr(self.state, 'auto_refresh', True),
+            "action_timeline": getattr(self.state, 'action_timeline', [])[-20:],
+            "search_engine": getattr(self.state, 'search_engine', 'tavily'),
+            "data_provider": getattr(self.state, 'data_provider', 'upstox'),
+            "fallback_data": getattr(self.state, 'fallback_data', True),
+            "fallback_search": getattr(self.state, 'fallback_search', True),
+            "fallback_ai": getattr(self.state, 'fallback_ai', True),
             "ai_provider": getattr(self.state, 'ai_provider', 'google'),
-            "ai_model": getattr(self.state, 'ai_model', 'gemini-2.5-flash'),
+            "ai_model": getattr(self.state, 'ai_model', 'gemini-3.1-pro'),
         }
         await self.manager.broadcast(payload)
 
     def _get_sleep_interval(self, phase: str) -> int:
         """Faster refresh during active hours, slower otherwise."""
         intervals = {
-            MarketPhase.PRE_MARKET: 60,
-            MarketPhase.OPENING_15: 10,    # Fast during opening range
-            MarketPhase.MID_SESSION: 30,
-            MarketPhase.POWER_HOUR: 15,    # Fast during power hour
-            MarketPhase.POST_MARKET: 120,
-            MarketPhase.CLOSED: 300,       # 5 min when closed
+            MarketPhase.PRE_MARKET_SETUP: 60,
+            MarketPhase.OPENING_VOLATILITY: 10,
+            MarketPhase.MID_MORNING_TREND: 30,
+            MarketPhase.LUNCH_CHOP: 30,
+            MarketPhase.PM_BREAKOUT: 15,
+            MarketPhase.POWER_HOUR: 15,
+            MarketPhase.POST_MARKET_SETTLEMENT: 120,
+            MarketPhase.CLOSED: 300,
         }
         return intervals.get(phase, 60)

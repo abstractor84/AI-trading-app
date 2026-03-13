@@ -46,12 +46,9 @@ class AIAdvisorService:
     # ─── Prompt Type 1: SCAN ────────────────────────────────────────
     def scan_market(self, candidates: list[dict], global_context: dict,
                     phase_ctx: dict, provider: str = "google",
-                    model_name: str = "gemini-3.1-pro", ai_fallback: bool = True) -> dict:
+                    model_name: str = "gemini-2.0-flash", ai_fallback: bool = True) -> dict:
         """
-        Batch-analyze multiple stocks in ONE AI call.
-        Returns top 1-3 actionable picks with reasoning.
-
-        Each candidate = {ticker, ta_data, pivots, atr}
+        SCAN uses 'flash' or 'instant' models by default to preserve quota.
         """
         now = datetime.now()
 
@@ -126,7 +123,7 @@ If NO high-conviction trades exist despite the high math probability, return: []
     # ─── Prompt Type 2: POSITION REVIEW ─────────────────────────────
     def review_positions(self, open_trades: list[dict], global_context: dict,
                          phase_ctx: dict, provider: str = "google",
-                         model_name: str = "gemini-3.1-pro", ai_fallback: bool = True) -> dict:
+                         model_name: str = "llama-3.3-70b-versatile", ai_fallback: bool = True) -> dict:
         """
         Review all open positions and advise on each.
         Returns per-position guidance: HOLD, TRAIL, PARTIAL BOOK, EXIT.
@@ -240,17 +237,24 @@ OUTPUT: Strictly valid JSON:
                              input_summary=f"Exit guidance for {len(open_trades)} positions, total P&L ₹{total_pnl:.0f}",
                              ai_fallback=ai_fallback)
 
-    # ─── Core AI Call (shared) ──────────────────────────────────────
     def _call_ai(self, prompt: str, prompt_type: str, provider: str,
-                 model_name: str, input_summary: str = "", ai_fallback: bool = True) -> dict:
+                 model_name: str, input_summary: str = "", ai_fallback: bool = True, _depth: int = 0) -> dict:
         """
-        Execute AI call with quota check and audit logging.
+        Execute AI call with strict fallback control.
+        If fallback_enabled is False, 429/Errors are returned directly to prompt user.
         """
+        if _depth > 2:
+            return {"error": "CRITICAL: Maximum failover depth reached. Quota exceeded across providers.", "severity": "danger"}
+
         # Quota gate
-        quota = quota_svc.check_quota(provider) # User feedback: per-provider quota
+        quota = quota_svc.check_quota(provider)
         if not quota["can_call"]:
-            logger.warning(f"Quota exceeded for {provider}")
-            return {"error": f"AI quota exceeded for {provider} (30/day). Try again later."}
+            if not ai_fallback:
+                return {"error": f"CRITICAL: Quota exceeded for {provider}. Fallback is DISABLED.", "severity": "danger"}
+            # Auto-failover logic if enabled
+            new_provider = "groq" if provider == "google" else "sambanova" if provider == "groq" else "google"
+            logger.info(f"Quota exceeded for {provider}. Auto-failing over to {new_provider}...")
+            return self._call_ai(prompt, prompt_type, new_provider, "default", input_summary, True, _depth + 1)
 
         try:
             if provider == "google":
@@ -262,39 +266,86 @@ OUTPUT: Strictly valid JSON:
             else:
                 return {"error": f"Unknown provider: {provider}"}
 
-            # Audit log
-            self._log_interaction(prompt_type, model_name, input_summary, result)
-            
-            # Update local quota tracker
-            quota_svc.log_usage(provider)
+            if "error" in result and ("429" in str(result["error"]) or "rate_limit" in str(result["error"])):
+                if not ai_fallback:
+                    return {"error": f"PROVIDER ERROR: {result['error']}. Fallback is DISABLED.", "severity": "danger"}
+                
+                # Same-provider model fallback first
+                if provider == "google" and model_name != "gemini-2.0-flash":
+                    logger.warning(f"Google 429 on {model_name}. Falling back to gemini-2.0-flash...")
+                    return self._call_ai(prompt, prompt_type, "google", "gemini-2.0-flash", input_summary, True, _depth + 1)
 
+                # Failover to next provider
+                next_prov = "groq" if provider == "google" else "sambanova"
+                logger.warning(f"{provider} rate limited. Failing over to {next_prov}...")
+                return self._call_ai(prompt, prompt_type, next_prov, "default", input_summary, True, _depth + 1)
+
+            # Add quota warning if low
             if quota.get("low_quota", False):
                 result["quota_warning"] = f"Warning: Less than 10% quota remaining for {provider}."
 
+            # Audit log
+            if "error" not in result:
+                self._log_interaction(prompt_type, model_used=model_name if model_name != "default" else provider, 
+                                     input_summary=input_summary, output=result)
+                quota_svc.log_usage(provider)
             return result
 
         except Exception as e:
-            if "429" in str(e) and model_name != "gemini-2.5-flash":
-                if not ai_fallback:
-                    logger.warning(f"AI Model {model_name} rate limited (429). Fallback is DISABLED. Failing.")
-                    return {"error": str(e)}
-                
-                logger.warning(f"AI Model {model_name} rate limited (429). Falling back to gemini-2.5-flash...")
-                try:
-                    if provider == "google":
-                        result = self._call_google("gemini-2.5-flash", prompt)
-                    elif provider == "sambanova":
-                        result = self._call_sambanova("Meta-Llama-3.1-8B-Instruct", prompt) # Known default for sambanova
-                    else:
-                        result = self._call_groq(model_name, prompt) # Keep groq for now
-                    quota_svc.log_usage(provider)
-                    return result
-                except Exception as ef:
-                    logger.error(f"AI Fallback also failed: {ef}")
-                    return {"error": str(ef)}
+            if not ai_fallback:
+                return {"error": f"SYSTEM ERROR: {str(e)}. Fallback is DISABLED.", "severity": "danger"}
             
-            logger.error(f"AI call failed ({provider}/{model_name}): {e}")
-            return {"error": str(e)}
+            # Same-provider model fallback on Exception too
+            if provider == "google" and model_name != "gemini-2.0-flash":
+                logger.warning(f"Google Exception on {model_name}: {e}. Falling back to gemini-2.0-flash...")
+                return self._call_ai(prompt, prompt_type, "google", "gemini-2.0-flash", input_summary, True, _depth + 1)
+
+            logger.error(f"AI call failed ({provider}): {e}. Attempting provider failover...")
+            next_prov = "groq" if provider == "google" else "sambanova"
+            return self._call_ai(prompt, prompt_type, next_prov, "default", input_summary, True, _depth + 1)
+
+    def list_available_models(self, provider: str) -> list[dict]:
+        """
+        Dynamically list models from the provider API and filter for 3 optimal ones.
+        Benchmarks: Reasoning, Latency, and Cost.
+        """
+        try:
+            if provider == "google" and self.google_key:
+                models = self.google_client.models.list()
+                # 2026 Selection: Flash 2.0 (Scan), Pro 1.5 (Review), Pro 3.1 (Exit)
+                # Filter for these specific benchmark leaders
+                selection = [
+                    {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (Fast Scan)"},
+                    {"value": "gemini-1.5-pro", "label": "Gemini 1.5 Pro (Balanced Review)"},
+                    {"value": "gemini-3.1-pro", "label": "Gemini 3.1 Pro (Deep Reasoning)"}
+                ]
+                return selection
+            
+            elif provider == "groq" and self.groq_key:
+                import requests
+                resp = requests.get("https://api.groq.com/openai/v1/models", 
+                                 headers={"Authorization": f"Bearer {self.groq_key}"}, timeout=5)
+                if resp.status_code == 200:
+                    all_m = [m["id"] for m in resp.json().get("data", [])]
+                    # Filter for top 3 Llama variants
+                    top_3 = []
+                    if "llama-3.3-70b-versatile" in all_m: top_3.append({"value": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Best)"})
+                    if "llama-3.1-8b-instant" in all_m: top_3.append({"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (Fast)"})
+                    if "mixtral-8x7b-32768" in all_m: top_3.append({"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B (Robust)"})
+                    return top_3[:3]
+            
+            elif provider == "sambanova" and self.samba_key:
+                # SambaNova SN50 Optimized Selection
+                return [
+                    {"value": "Meta-Llama-3.3-70B-Instruct", "label": "Llama 3.3 70B (SN50 Optimized)"},
+                    {"value": "Meta-Llama-3.1-8B-Instruct", "label": "Llama 3.1 8B (Low Latency)"},
+                    {"value": "Llama-3.2-3B-Instruct", "label": "Llama 3.2 3B (Ultra Fast)"}
+                ]
+        except Exception as e:
+            logger.warning(f"Failed to list models for {provider}: {e}")
+        
+        # Static fallback if API is unreachable
+        return [{"value": "default", "label": "Default Model"}]
 
     def _call_google(self, model_name: str, prompt: str) -> dict:
         """Call Google Gemini API."""

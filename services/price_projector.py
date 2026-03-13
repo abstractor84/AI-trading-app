@@ -42,13 +42,14 @@ class PriceProjector:
     MARKET_CLOSE_MIN = 15 * 60       # 3:00 PM
     TOTAL_TRADING_MINS = MARKET_CLOSE_MIN - MARKET_OPEN_MIN  # 345 minutes
 
-    def generate_projection(self, df: pd.DataFrame, interval_minutes: int = 1) -> dict:
+    def generate_projection(self, df: pd.DataFrame, interval_minutes: int = 1, n_forecast: int = None) -> dict:
         """
         Generate price projection from current time to market close.
 
         Args:
             df: OHLCV DataFrame with DatetimeIndex (today's intraday data)
             interval_minutes: granularity of the projection (1 or 5 min)
+            n_forecast: optional explicit number of bars to project
 
         Returns:
             {
@@ -75,14 +76,17 @@ class PriceProjector:
         current_price = float(prices[-1])
         n_observed = len(prices)
 
-        # How many candles to project (remaining until 3 PM)
-        now = datetime.now()
-        current_min = now.hour * 60 + now.minute
-        remaining_mins = max(10, self.MARKET_CLOSE_MIN - current_min)
-        n_forecast = remaining_mins // interval_minutes
-
-        if n_forecast <= 0:
-            n_forecast = 30  # Minimum forecast window
+        # How many candles to project
+        if n_forecast is None:
+            now = datetime.now()
+            current_min = now.hour * 60 + now.minute
+            remaining_mins = self.MARKET_CLOSE_MIN - current_min
+            
+            # If after hours, use fallback window
+            if remaining_mins <= 0:
+                n_forecast = 30
+            else:
+                n_forecast = max(10, remaining_mins // interval_minutes)
 
         # Calculate VWAP as gravity anchor
         vwap = self._compute_vwap(today_df)

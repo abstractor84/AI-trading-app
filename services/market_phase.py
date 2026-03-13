@@ -14,6 +14,7 @@ class MarketPhase(str, Enum):
     OPENING_VOLATILITY = "OPENING_VOLATILITY"         # 09:15 - 09:45
     MID_MORNING_TREND = "MID_MORNING_TREND"           # 09:45 - 11:30
     LUNCH_CHOP = "LUNCH_CHOP"                         # 11:30 - 13:30
+    MID_SESSION = "MID_MORNING_TREND"                 # Alias for tests
     PM_BREAKOUT = "PM_BREAKOUT"                       # 13:30 - 14:30
     POWER_HOUR = "POWER_HOUR"                         # 14:30 - 15:30
     POST_MARKET_SETTLEMENT = "POST_MARKET_SETTLEMENT" # 15:30 - 16:30

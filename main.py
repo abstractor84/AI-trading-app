@@ -28,7 +28,7 @@ load_dotenv(_DOT_ENV_PATH)
 from services.state import AppState
 from ws_handler import ConnectionManager, handle_websocket
 from background_engine import BackgroundEngine
-from database import SessionLocal
+from database import SessionLocal, wipe_all_data
 from models import Watchlist, WatchlistStock, DashboardStock
 
 logging.basicConfig(
@@ -55,6 +55,9 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(bg_engine.run())
     yield
     task.cancel()
+    if os.getenv("SIMULATION", "false").lower() == "true":
+        logger.warning("SIMULATION mode detected. Cleaning up DB tables...")
+        wipe_all_data()
 
 app = FastAPI(title="AI Trading Companion V2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")

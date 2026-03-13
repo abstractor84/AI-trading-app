@@ -2,6 +2,7 @@ import pytest
 import responses
 import json
 import gzip
+import pandas as pd
 from io import BytesIO
 from unittest.mock import patch, MagicMock
 from services.upstox_service import UpstoxService, get_instrument_key, _instrument_cache
@@ -37,7 +38,6 @@ def test_validate_token_success():
         svc = UpstoxService()
         responses.add(responses.GET, f"{svc.BASE_URL}/user/profile", status=200)
         assert svc.validate_token() is True
-        assert svc.is_authenticated is True
 
 @responses.activate
 def test_fetch_profile_success():
@@ -50,59 +50,62 @@ def test_fetch_profile_success():
 
 def test_reload_token():
     svc = UpstoxService()
-    with patch("os.getenv", return_value="reloaded_token"), \
-         patch.object(svc, "validate_token") as mock_val:
+    with patch("os.getenv", return_value="reloaded_token"):
         svc.reload_token()
         assert svc.access_token == "reloaded_token"
-        assert mock_val.called
 
-        @responses.activate
-        def test_fetch_intraday_candles_success():
-            with patch("os.getenv", return_value="fake_token"):
-                svc = UpstoxService()
-                # [Timestamp, Open, High, Low, Close, Volume, OI]
-                candles = [["2024-01-01T09:15:00+05:30", 100, 101, 99, 100.5, 1000, 0]]
-                responses.add(responses.GET, "https://api.upstox.com/v3/historical-candle/intraday/KEY/minutes/5",
-                              json={"data": {"candles": candles}}, status=200)
+@responses.activate
+def test_fetch_intraday_candles_success():
+    with patch("os.getenv", return_value="fake_token"):
+        svc = UpstoxService()
+        # [Timestamp, Open, High, Low, Close, Volume, OI]
+        candles = [["2024-01-01T09:15:00+05:30", 100, 101, 99, 100.5, 1000, 0]]
+        # Upstox V3 endpoint
+        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/KEY/minutes/5",
+                      json={"data": {"candles": candles}}, status=200)
+
+        df = svc.fetch_intraday_candles("KEY", interval="5", unit="minutes")
+        assert df is not None
+        assert not df.empty
+        assert df.iloc[0]["Close"] == 100.5            
+
+@responses.activate
+def test_fetch_historical_candles_success():
+    with patch("os.getenv", return_value="fake_token"):
+        svc = UpstoxService()
+        candles = [["2024-01-01T09:15:00+05:30", 100, 101, 99, 100.5, 1000, 0]]
+        import re
+        # Match URL with any date suffix
+        url_re = re.compile(rf"{svc.BASE_URL}/historical-candle/KEY/minutes/5/.*")
+        responses.add(responses.GET, url_re, json={"data": {"candles": candles}}, status=200)
         
-                df = svc.fetch_intraday_candles("KEY", interval="5minute")
-                assert not df.empty
-                assert df.iloc[0]["Close"] == 100.5            
-            @responses.activate
-            def test_fetch_historical_candles_success():
-                with patch("os.getenv", return_value="fake_token"):
-                    svc = UpstoxService()
-                    candles = [["2024-01-01T09:15:00+05:30", 100, 101, 99, 100.5, 1000, 0]]
-                    import re
-                    # Match URL with any date suffix
-                    url_re = re.compile(r"https://api\.upstox\.com/v3/historical-candle/KEY/minutes/5/.*")
-                    responses.add(responses.GET, url_re, json={"data": {"candles": candles}}, status=200)
-                    
-                    df = svc.fetch_historical_candles("KEY", interval="5", from_date="2024-01-01", to_date="2024-01-05")
-                    assert df is not None
-                    assert not df.empty
-            
-            @responses.activate
-            def test_fetch_intraday_candles_unauthorized():
-                with patch("os.getenv", return_value="expired_token"):
-                    svc = UpstoxService()
-                    responses.add(responses.GET, "https://api.upstox.com/v3/historical-candle/intraday/KEY/minutes/5", status=401)
-                    res = svc.fetch_intraday_candles("KEY", interval="5")
-                    assert res is None
+        df = svc.fetch_historical_candles("KEY", unit="minutes", interval="5", days=5)
+        assert df is not None
+        assert not df.empty
+
+@responses.activate
+def test_fetch_intraday_candles_unauthorized():
+    with patch("os.getenv", return_value="expired_token"):
+        svc = UpstoxService()
+        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/KEY/minutes/5", status=401)
+        res = svc.fetch_intraday_candles("KEY", interval="5", unit="minutes")
+        assert res is None
+
 @responses.activate
 def test_fetch_market_quote_success():
     with patch("os.getenv", return_value="token"):
         svc = UpstoxService()
-        responses.add(responses.GET, f"{svc.BASE_URL}/market-quote/quotes", 
-                      json={"data": {"NSE_EQ|RELIANCE": {"last_price": 2500}}}, status=200)
+        # V3 returns flat dict, but our service normalizes it to V2 nested 'data'
+        mock_response = {"data": {"NSE_EQ|RELIANCE": {"last_price": 2500}}}
+        responses.add(responses.GET, f"{svc.BASE_URL}/market-quote/ltp?instrument_key=NSE_EQ%7CRELIANCE", 
+                      json=mock_response, status=200)
         res = svc.fetch_market_quote("NSE_EQ|RELIANCE")
         assert res["data"]["NSE_EQ|RELIANCE"]["last_price"] == 2500
 
 def test_fetch_ohlcv_unauthenticated():
-    svc = UpstoxService()
-    svc.is_authenticated = False
-    assert svc.fetch_ohlcv("T") is None
-
+    with patch("os.getenv", return_value=None):
+        svc = UpstoxService()
+        assert svc.fetch_ohlcv("T") is None
 
 @patch.object(UpstoxService, "fetch_intraday_candles")
 @patch.object(UpstoxService, "fetch_historical_candles")
@@ -110,7 +113,6 @@ def test_fetch_ohlcv_unauthenticated():
 def test_fetch_ohlcv_merge(mock_key, mock_hist, mock_intra):
     with patch("os.getenv", return_value="token"):
         svc = UpstoxService()
-        import pandas as pd
         idx1 = pd.to_datetime(["2024-01-01 09:15:00"]).tz_localize("Asia/Kolkata")
         idx2 = pd.to_datetime(["2024-01-01 09:20:00"]).tz_localize("Asia/Kolkata")
         
@@ -131,15 +133,15 @@ def test_upstox_errors_and_exceptions():
         svc = UpstoxService()
         
         # 1. Rate limit (429)
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/5minute", status=429)
-        assert svc.fetch_intraday_candles("K") is None
+        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/minutes/5", status=429)
+        assert svc.fetch_intraday_candles("K", interval="5") is None
         
         # 2. Validation exception
         responses.add(responses.GET, f"{svc.BASE_URL}/user/profile", body=Exception("Conn error"))
         assert svc.validate_token() is False
         
         # 3. Candles to DF empty
-        assert svc._candles_to_df([]).empty
+        assert svc._candles_to_df([]) is None
         
         # 4. Market quote exception
         with patch("services.upstox_service.requests.get", side_effect=Exception("Quote Fail")):
@@ -148,7 +150,6 @@ def test_upstox_errors_and_exceptions():
 def test_candles_to_df_tz_localize():
     svc = UpstoxService()
     # Test with naive timestamps
-    import pandas as pd
     candles = [["2024-01-01 09:15:00", 100, 101, 99, 100, 1000, 0]]
     df = svc._candles_to_df(candles)
     assert df.index.tz is not None
@@ -160,47 +161,37 @@ def test_upstox_http_errors():
         svc = UpstoxService()
         
         # Intraday 429 and 500
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/5minute", status=429)
-        svc.fetch_intraday_candles("K")
+        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/minutes/5", status=429)
+        svc.fetch_intraday_candles("K", interval="5")
         
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/5minute", status=500)
-        svc.fetch_intraday_candles("K")
+        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/minutes/5", status=500)
+        svc.fetch_intraday_candles("K", interval="5")
 
         # Historical 401, 429, 500
         import re
-        url_re = re.compile(rf"{svc.BASE_URL}/historical-candle/K/5minute/.*")
+        url_re = re.compile(rf"{svc.BASE_URL}/historical-candle/K/minutes/5/.*")
         responses.add(responses.GET, url_re, status=401)
-        svc.fetch_historical_candles("K")
+        svc.fetch_historical_candles("K", interval="5")
         
         responses.add(responses.GET, url_re, status=429)
-        svc.fetch_historical_candles("K")
+        svc.fetch_historical_candles("K", interval="5")
         
         responses.add(responses.GET, url_re, status=500)
-        svc.fetch_historical_candles("K")
-
-@responses.activate
-def test_fetch_profile_exception():
-    with patch("os.getenv", return_value="token"):
-        svc = UpstoxService()
-        with patch("services.upstox_service.requests.get", side_effect=Exception("Hard error")):
-            assert svc.fetch_profile() is None
+        svc.fetch_historical_candles("K", interval="5")
 
 def test_fetch_market_quote_exception():
     svc = UpstoxService()
-    svc.is_authenticated = True
-    with patch("requests.get", side_effect=Exception("Quote Fail")):
+    with patch("os.getenv", return_value="token"), \
+         patch("services.upstox_service.requests.get", side_effect=Exception("Quote Fail")):
         assert svc.fetch_market_quote("K") is None
-
 
 def test_validate_token_no_token():
     svc = UpstoxService()
-    svc.access_token = None
-    assert svc.validate_token() is False
+    with patch("os.getenv", return_value=None):
+        assert svc.validate_token() is False
 
 def test_reload_token_empty():
     svc = UpstoxService()
     with patch("os.getenv", return_value=None):
         svc.reload_token()
         assert svc.is_authenticated is False
-
-

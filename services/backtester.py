@@ -14,13 +14,32 @@ class VectorizedBacktester:
 
     def _prepare_indicators(self, params: dict):
         """Compute the strategy indicators using dictionary parameters."""
+        if 'LZ_Signal' in self.df.columns:
+            return # Already prepared
+            
         ema_fast = params.get('ema_fast', 9)
         ema_slow = params.get('ema_slow', 21)
         rsi_len = params.get('rsi_len', 14)
 
+        from services.advanced_indicators import classifier
         self.df.ta.ema(length=ema_fast, append=True)
         self.df.ta.ema(length=ema_slow, append=True)
         self.df.ta.rsi(length=rsi_len, append=True)
+        
+        # Calculate LZ Signal
+        lz_series = classifier.classify_series(self.df, window=len(self.df))
+        if lz_series:
+            lz_df = pd.DataFrame(lz_series)
+            lz_df.index = pd.to_datetime(lz_df['time'], unit='s', utc=True).dt.tz_convert('Asia/Kolkata')
+            # Check for timezone mismatch
+            if self.df.index.tz is None:
+                self.df.index = self.df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+            elif str(self.df.index.tz) != 'Asia/Kolkata':
+                self.df.index = self.df.index.tz_convert('Asia/Kolkata')
+                
+            self.df['LZ_Signal'] = lz_df['signal'].reindex(self.df.index, method='nearest').fillna(0)
+        else:
+            self.df['LZ_Signal'] = 0
         
         # Calculate daily VWAP
         if 'Date' not in self.df.columns:
@@ -46,16 +65,27 @@ class VectorizedBacktester:
         ema_slow_col = f"EMA_{params.get('ema_slow', 21)}"
         rsi_col = f"RSI_{params.get('rsi_len', 14)}"
         
-        # Entry Logic (Vectorized mask)
-        # Buy: Fast EMA > Slow EMA (Trend), RSI < 40 (Oversold pull-back), Price > VWAP (Intraday Bullish)
-        buy_condition = (df[ema_fast_col] > df[ema_slow_col]) & \
-                        (df[rsi_col] < params.get('rsi_buy_threshold', 40)) & \
+        # Entry Logic (Vectorized mask + LZ ML Signal)
+        if 'LZ_Signal' not in df.columns:
+            df['LZ_Signal'] = 0
+            
+        print(f"LZ Signals: Buy={ (df['LZ_Signal']==1).sum() }, Short={ (df['LZ_Signal']==-1).sum() }")
+        print(f"Trend Alignment: Bull={ (df[ema_fast_col] > df[ema_slow_col]).sum() }, Bear={ (df[ema_fast_col] < df[ema_slow_col]).sum() }")
+        print(f"VWAP Alignment: Above={ (df['Close'] > df['VWAP']).sum() }, Below={ (df['Close'] < df['VWAP']).sum() }")
+
+        # Buy: LZ Signal is Bullish, Fast EMA > Slow EMA (Trend), RSI not overbought, Price > VWAP
+        buy_condition = (df['LZ_Signal'] == 1) & \
+                        (df[ema_fast_col] > df[ema_slow_col]) & \
+                        (df[rsi_col] < params.get('rsi_buy_threshold', 45)) & \
                         (df['Close'] > df['VWAP'])
                         
-        # Sell Short: Fast EMA < Slow EMA (Trend), RSI > 60 (Overbought), Price < VWAP (Intraday Bearish)
-        short_condition = (df[ema_fast_col] < df[ema_slow_col]) & \
-                          (df[rsi_col] > params.get('rsi_short_threshold', 60)) & \
+        # Sell Short: LZ Signal is Bearish, Fast EMA < Slow EMA (Trend), RSI not oversold, Price < VWAP
+        short_condition = (df['LZ_Signal'] == -1) & \
+                          (df[ema_fast_col] < df[ema_slow_col]) & \
+                          (df[rsi_col] > params.get('rsi_short_threshold', 55)) & \
                           (df['Close'] < df['VWAP'])
+        
+        print(f"Final Entry Conditions: Buy={buy_condition.sum()}, Short={short_condition.sum()}")
 
         df['Signal'] = 0
         df.loc[buy_condition, 'Signal'] = 1

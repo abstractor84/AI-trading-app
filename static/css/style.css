@@ -60,6 +60,138 @@ body {
     overflow-x: hidden;
 }
 
+/* ─── Global Search ──────────────────────────────────── */
+.global-search {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    gap: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    margin: 0 20px;
+    flex: 1;
+    max-width: 400px;
+    min-width: 200px;
+    height: 32px;
+}
+
+.search-input {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    width: 100%;
+}
+
+.search-input:focus {
+    outline: none;
+}
+
+.search-btn {
+    padding: 4px 10px !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+}
+
+.search-btn:hover {
+    color: var(--accent-bright) !important;
+}
+
+.tf-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tf-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.tf-btn.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   V3 Layout (3-Column Professional)
+   ───────────────────────────────────────────────────────────── */
+.v3-grid {
+    display: grid;
+    grid-template-columns: 350px 1fr 320px;
+    gap: 20px;
+    padding: 20px;
+    height: calc(100vh - 160px);
+    overflow: hidden;
+}
+
+.v3-col {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    height: 100%;
+    overflow-y: auto;
+    padding-right: 5px;
+}
+
+/* Scrollbar styling for columns */
+.v3-col::-webkit-scrollbar { width: 4px; }
+.v3-col::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+
+/* Discovery & Recommendations */
+.reco-list { display: flex; flex-direction: column; gap: 12px; }
+.reco-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.reco-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+/* Sentinel News Styling */
+.news-list { display: flex; flex-direction: column; gap: 10px; }
+.news-item {
+    background: rgba(255,255,255,0.02);
+    border-left: 3px solid var(--accent);
+    padding: 10px;
+    border-radius: 4px;
+}
+.news-item.Bullish { border-left-color: var(--green); }
+.news-item.Bearish { border-left-color: var(--red); }
+.news-item .news-title { font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px; }
+.news-item .news-meta { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; }
+
+/* Pulse Animation for Sentinel */
+.pulse-dot {
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    display: inline-block;
+    box-shadow: 0 0 0 rgba(129, 140, 248, 0.4);
+    animation: pulse 2s infinite;
+}
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(129, 140, 248, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(129, 140, 248, 0); }
+}
+
+/* Operational Column Adjustments */
+.history-table-wrapper { flex: 1; overflow-y: auto; }
+
+/* Hide old layout classes */
+.v2-layout, .v2-left-col, .v2-right-col { display: none; }
+
 /* ─────────────────────────────────────────────────────────────
    6. Header & Status
    ───────────────────────────────────────────────────────────── */
@@ -156,8 +288,10 @@ body {
 .brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+    flex: 1;
 }
+
 
 .brand .logo-icon {
     font-size: 24px;
@@ -296,14 +430,20 @@ body {
 .ticker-bar {
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
-    padding: 8px 24px;
+    padding: 4px 24px;
     overflow-x: auto;
+    position: sticky;
+    top: 70px;
+    z-index: 999;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
 .market-ticker {
     display: flex;
-    gap: 24px;
+    gap: 20px;
     white-space: nowrap;
+    min-height: 24px;
+    align-items: center;
 }
 
 .pulse-item {
@@ -1256,6 +1396,7 @@ body {
     font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
+    cursor: pointer;
 }
 
 .sc-signal {

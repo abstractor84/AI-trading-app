@@ -39,9 +39,30 @@ def test_adaptive_supertrend(sample_df):
     assert "regime" in result
     assert len(result["value"]) > 0
 
-def test_knn_forecaster(sample_df):
-    knn = KNNTrendForecaster(k=2, sequence_length=5)
-    forecast = knn.forecast(sample_df)
-    assert forecast is not None
-    assert len(forecast) == 10
+def test_lorentzian_signal_logic(sample_df):
+    """Verify Lorentzian only signals when filters (EMA, ST, ADX) align."""
+    lc = LorentzianClassifier(k=5, lookback=100)
+    # Force a clear trend in the sample data for testing
+    sample_df['Close'] = np.linspace(100, 150, 150) # Strong uptrend
+    sample_df['High'] = sample_df['Close'] + 1
+    sample_df['Low'] = sample_df['Close'] - 1
+    
+    result = lc.classify_series(sample_df, window=20)
+    
+    # In a strong manual uptrend, signals should be either 0 or 1, never -1
+    signals = [r['signal'] for r in result]
+    assert -1 not in signals, "Lorentzian signaled SHORT in a clear uptrend"
+
+def test_adaptive_st_regimes(sample_df):
+    """Verify Adaptive SuperTrend correctly identifies volatility regimes."""
+    ast = AdaptiveSuperTrend()
+    # Add a high-volatility spike
+    sample_df.iloc[-10:, sample_df.columns.get_loc('High')] += 50
+    sample_df.iloc[-10:, sample_df.columns.get_loc('Low')] -= 50
+    
+    result = ast.calculate(sample_df, window=50)
+    regimes = result['regime']
+    
+    # Last 10 should likely be regime 3 (High volatility)
+    assert 3 in regimes[-10:], "Failed to detect high volatility regime"
 

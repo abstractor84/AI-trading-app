@@ -42,11 +42,10 @@ async def test_get_authorized_ws_url_scenarios(streamer):
         # Success
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"data": {"authorizedRedirectUri": "wss://test.url"}}
+        mock_resp.json.return_value = {"data": {"authorized_redirect_uri": "wss://test.url"}}
         mock_get.return_value = mock_resp
         url = streamer._get_authorized_ws_url()
-        assert url == "wss://test.url"
-        
+        assert url == "wss://test.url"        
         # 401 Error
         mock_resp.status_code = 401
         url = streamer._get_authorized_ws_url()
