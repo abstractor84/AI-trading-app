@@ -65,10 +65,16 @@ class AppState:
                 self.ai_provider = settings.ai_provider
                 self.ai_model = settings.ai_model
 
-            # Load today's trades
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            # Load active and today's closed trades
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+            # Today's start in IST, converted to naive UTC for DB comparison
+            today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start_utc = today_start_ist.astimezone(pytz.UTC).replace(tzinfo=None)
+
             trades = db.query(Trade).filter(
-                Trade.timestamp >= today_start
+                (Trade.status == "OPEN") | (Trade.close_time >= today_start_utc)
             ).all()
 
             for t in trades:

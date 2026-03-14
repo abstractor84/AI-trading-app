@@ -47,18 +47,27 @@ class ConnectionManager:
     async def send_state(self, websocket: WebSocket, state):
         """Send full initial state to a newly connected client."""
         phase_ctx = market_phase_svc.get_phase_context()
+        from services.quota_service import quota_svc
+        
         payload = {
             "type": "state_update",
             "capital": state.capital,
             "max_loss": state.max_loss_per_trade,
             "open_trades": state.open_trades,
             "closed_trades": state.closed_trades,
-            "global_context": state.global_context,
+            "global_context": getattr(state, 'global_context', {}),
             "market_phase": phase_ctx,
-            "search_engine": getattr(state, 'search_engine', 'ddgs'),
-            "data_provider": getattr(state, 'data_provider', 'yfinance'),
-            "search_fallback": getattr(state, 'search_fallback', False),
-            "auto_refresh": getattr(state, 'auto_refresh', True),
+            "ai_calls_today": quota_svc.get_total_daily_usage(),
+            "ai_calls_limit": 20,
+            "ai_advisor": getattr(state, 'ai_advisor_message', None),
+            "ai_scans_today": getattr(state, 'ai_scans_today', []),
+            "connection_status": getattr(state, 'connection_status', {}),
+            "action_timeline": getattr(state, 'action_timeline', [])[-20:],
+            "search_engine": getattr(state, 'search_engine', 'tavily'),
+            "data_provider": getattr(state, 'data_provider', 'upstox'),
+            "fallback_data": getattr(state, 'fallback_data', True),
+            "fallback_search": getattr(state, 'fallback_search', True),
+            "fallback_ai": getattr(state, 'fallback_ai', True),
             "ai_provider": getattr(state, 'ai_provider', 'google'),
             "ai_model": getattr(state, 'ai_model', 'gemini-3.1-pro'),
         }
