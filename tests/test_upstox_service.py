@@ -95,13 +95,13 @@ def test_fetch_intraday_candles_unauthorized():
 def test_fetch_market_quote_success():
     with patch("os.getenv", return_value="token"):
         svc = UpstoxService()
-        # V3 returns flat dict, but our service normalizes it to V2 nested 'data'
-        mock_response = {"data": {"NSE_EQ|RELIANCE": {"last_price": 2500}}}
-        responses.add(responses.GET, f"{svc.BASE_URL}/market-quote/ltp?instrument_key=NSE_EQ%7CRELIANCE", 
+        # We switched to 'quotes' endpoint to get 'close' price
+        mock_response = {"data": {"NSE_EQ|RELIANCE": {"last_price": 2500, "close": 2450}}}
+        responses.add(responses.GET, f"{svc.BASE_URL}/market-quote/quotes?instrument_key=NSE_EQ%7CRELIANCE",
                       json=mock_response, status=200)
         res = svc.fetch_market_quote("NSE_EQ|RELIANCE")
         assert res["data"]["NSE_EQ|RELIANCE"]["last_price"] == 2500
-
+        assert res["data"]["NSE_EQ|RELIANCE"]["close"] == 2450
 def test_fetch_ohlcv_unauthenticated():
     with patch("os.getenv", return_value=None):
         svc = UpstoxService()

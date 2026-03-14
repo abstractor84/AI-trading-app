@@ -1,9 +1,11 @@
 import logging
 import asyncio
+import threading
 from duckduckgo_search import DDGS
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+_ddgs_lock = threading.Lock()
 
 class SentinelService:
     """
@@ -220,9 +222,18 @@ class SentinelService:
             return []
 
     async def _fetch_ddgs(self, query: str):
-        with DDGS() as ddgs:
-            results = list(ddgs.news(query, region="in-en", max_results=5))
-            return [{"title": r.get('title', ''), "url": r.get('url', '')} for r in results]
+        """Fetch news using DDGS with thread safety and safe field extraction."""
+        try:
+            def sync_fetch():
+                with _ddgs_lock:
+                    with DDGS() as ddgs:
+                        results = list(ddgs.news(query, region="in-en", max_results=5))
+                        return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
+            
+            return await asyncio.to_thread(sync_fetch)
+        except Exception as e:
+            logger.error(f"SKEPTIC: DDGS fetch failed for {query}: {e}")
+            return []
 
     async def _fetch_headlines(self, query: str) -> list:
         """Fetch latest news titles (legacy compatibility)."""
@@ -235,11 +246,11 @@ class SentinelService:
             def get_news():
                 with DDGS() as ddgs:
                     results = list(ddgs.news(query, max_results=5))
-                    return [{"title": r.get('title', ''), "url": r.get('url', r.get('link', ''))} for r in results]
+                    return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
             
             return await asyncio.to_thread(get_news)
         except Exception as e:
-            logger.debug(f"DDGS fetch in Sentinel failed: {e}")
+            logger.debug(f"SKEPTIC: DDGS fetch in Sentinel failed: {e}")
             return []
 
     def _check_keywords(self, text: str) -> set:

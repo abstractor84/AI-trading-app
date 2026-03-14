@@ -10,7 +10,7 @@ import datetime
 # Professional Intent-Based UI Testing for SuperNova V3
 # ---------------------------------------------------
 
-TEST_PORT = 8005
+TEST_PORT = 8007
 
 @pytest.fixture(scope="session", autouse=True)
 def start_server():

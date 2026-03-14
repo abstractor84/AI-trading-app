@@ -433,7 +433,7 @@ body {
     padding: 4px 24px;
     overflow-x: auto;
     position: sticky;
-    top: 70px;
+    top: 60px;
     z-index: 999;
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }

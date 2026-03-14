@@ -23,8 +23,47 @@ class TechnicalAnalysisService:
 
     def fetch_ohlcv(self, ticker: str, period="30d", interval="5m", data_provider="upstox", fallback_enabled=True):
         """Fetch OHLCV data. Uses Upstox by default, falls back to yfinance only if allowed."""
+        import os
+        import numpy as np
+        if os.getenv("SIMULATION", "false").lower() == "true":
+            # Generate more data for backtesting (500 rows)
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+            # Use a fixed reference time for deterministic testing if needed, or now IST
+            now = datetime.datetime.now(ist)
+
+            # If current time is past 15:30, cap it at 15:30 today
+            if now.hour > 15 or (now.hour == 15 and now.minute > 30):
+                now = now.replace(hour=15, minute=30, second=0, microsecond=0)
+            elif now.hour < 9:
+                # If before market, cap at 15:30 yesterday
+                now = (now - datetime.timedelta(days=1)).replace(hour=15, minute=30, second=0, microsecond=0)
+
+            dates = [now - datetime.timedelta(minutes=5*i) for i in range(500, 0, -1)]
+            # Create oscillatory data to trigger both BUY and SHORT
+            x = np.linspace(0, 10 * np.pi, 500)
+            prices = 100 + 5 * np.sin(x)
+
+            df = pd.DataFrame({
+                "Open": prices + np.random.randn(500) * 0.1,
+                "High": prices + 0.5,
+                "Low": prices - 0.5,
+                "Close": prices,
+                "Volume": np.random.randint(1000, 5000, 500)
+            }, index=dates)
+            
+            # SKEPTIC: Backtester requires a Signal column in simulation mode
+            df['Signal'] = 0
+            # Create some mock signals: BUY at troughs, SHORT at peaks
+            df.loc[df['Close'] < 96, 'Signal'] = 1
+            df.loc[df['Close'] > 104, 'Signal'] = -1
+            
+            return df
         df = None
-        if data_provider == "upstox" and _upstox_svc.is_authenticated:
+        # SKEPTIC: GIFT Nifty is known to fail on Upstox Historical API. Skip to trigger fallback immediately.
+        is_gift = "GIFT" in ticker.upper()
+        
+        if not is_gift and data_provider == "upstox" and _upstox_svc.is_authenticated:
             # Existing Upstox Logic
             days = 30
             if period.endswith("d"): days = int(period.replace("d", ""))
@@ -60,7 +99,12 @@ class TechnicalAnalysisService:
             # Fallback to yfinance
             logger.info(f"Using yfinance for {ticker} (Provider: {data_provider}, Fallback: {fallback_enabled})")
             try:
-                yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
+                # SKEPTIC: GIFT Nifty is best represented by ^NSEI proxy on yfinance for charting
+                if "GIFT" in ticker.upper():
+                    yf_ticker = "^NSEI"
+                else:
+                    yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
+                
                 df = yf.download(yf_ticker, period=period, interval=interval, auto_adjust=True, progress=False)
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
@@ -320,7 +364,17 @@ class TechnicalAnalysisService:
 
         # 1. Simulation Check
         if os.getenv("SIMULATION", "false").lower() == "true":
-            now = int(time.time()) - 19800
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+            now_dt = datetime.datetime.now(ist)
+            
+            # Cap at 15:30
+            if now_dt.hour > 15 or (now_dt.hour == 15 and now_dt.minute > 30):
+                now_dt = now_dt.replace(hour=15, minute=30, second=0, microsecond=0)
+            elif now_dt.hour < 9:
+                now_dt = (now_dt - datetime.timedelta(days=1)).replace(hour=15, minute=30, second=0, microsecond=0)
+            
+            now = int(now_dt.timestamp())
             step = 60 if interval == '1m' else 300 if interval == '5m' else 900 if interval == '15m' else 3600 if interval == '1h' else 86400
             mock_ohlc = [{"time": now - i * step, "open": 100+i%5, "high": 105+i%5, "low": 95+i%5, "close": 102+i%5} for i in range(100, 0, -1)]
             return {
@@ -329,9 +383,12 @@ class TechnicalAnalysisService:
                 "ohlc": mock_ohlc,
                 "adx_series": [{"time": c['time'], "value": 25.0 + (i%10)} for i, c in enumerate(mock_ohlc)],
                 "rsi_series": [{"time": c['time'], "value": 45.0 + (i%5)} for i, c in enumerate(mock_ohlc)],
-                "ml_adaptive_st": {"time": [c['time'] for c in mock_ohlc], "value": [98+i%2 for i in range(100)], "trend": [1]*50 + [-1]*50},
+                "ml_adaptive_st": {"time": [c['time'] for c in mock_ohlc], "value": [98+i%2 for i in range(100)], "trend": [1]*50 + [-1]*50, "regime": [1]*33 + [2]*33 + [3]*34},
                 "ml_lorentzian": [{"time": c['time'], "signal": 1 if i % 20 == 0 else -1 if i % 25 == 0 else 0, "score": 0.5} for i, c in enumerate(mock_ohlc)],
+                "ml_knn": [{"time": c['time'], "value": 100+i%3, "trend": 1 if i%10 < 5 else -1} for i, c in enumerate(mock_ohlc)],
                 "vwap": 101.0,
+                "ema_9": 101.5,
+                "ema_21": 100.5,
                 "interval": interval,
                 "projection": [102.5, 103.0, 103.5],
                 "proj_timestamps": [now + i * step for i in range(1, 4)],
@@ -351,6 +408,20 @@ class TechnicalAnalysisService:
         if df is None or df.empty:
             return {"error": f"No data available for {ticker}"}
 
+        # SKEPTIC: Truncate data past 15:30 IST for intraday to prevent 'Ghost Data' reported by user
+        if interval in ["1m", "5m", "15m", "1h"]:
+            try:
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize('UTC').tz_convert('Asia/Kolkata')
+                else:
+                    df.index = df.index.tz_convert('Asia/Kolkata')
+                
+                # Filter rows where time is <= 15:30
+                df = df[df.index.map(lambda x: (x.hour < 15) or (x.hour == 15 and x.minute <= 30))]
+                # Convert back to UTC for consistency if needed, but int(t.timestamp()) is UTC epoch anyway
+            except Exception as e:
+                logger.error(f"SKEPTIC: Ghost data filtering failed: {e}")
+
         # 3. Compute Basic Indicators
         indicators = self.compute_indicators(df)
         
@@ -359,8 +430,10 @@ class TechnicalAnalysisService:
         proj_res = price_projector.generate_projection(df, interval_minutes=proj_interval)
         
         # 5. Compute ML Series
+        from services.advanced_indicators import classifier, adaptive_st, knn_forecaster
         lz_series = classifier.classify_series(df, window=500)
         st_series = adaptive_st.calculate(df, window=500)
+        knn_series = knn_forecaster.get_historical_shading(df, window=500)
         
         # 6. Extract ADX & RSI
         adx_series = []
@@ -407,6 +480,7 @@ class TechnicalAnalysisService:
             "rsi_series": rsi_series,
             "ml_adaptive_st": st_series,
             "ml_lorentzian": lz_series,
+            "ml_knn": knn_series,
             "vwap": indicators.get("vwap") if indicators else current_price,
             "interval": interval,
             "projection": proj_res.get("projection"),

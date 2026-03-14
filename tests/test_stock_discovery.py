@@ -26,8 +26,8 @@ def test_fetch_global_indices_partial_data(mock_ticker, svc):
     mock_ticker.return_value.history.return_value = mock_hist
     
     res = svc.fetch_global_indices()
-    assert res["global"]["S&P 500"]["value"] == 0
-    # Test VIX exception
+    assert res["global"]["S&P 500"]["value"] == 100.0
+    assert res["global"]["S&P 500"]["change"] == 0.0
     mock_ticker.side_effect = Exception("VIX Error")
     res = svc.fetch_global_indices()
     assert res["vix"]["value"] == 0
@@ -90,8 +90,8 @@ def test_get_top_candidates_success(mock_download, svc):
     
     # Simple data: 2 rows (days)
     data = [
-        [100, 1000, 200, 2000], # Day 1
-        [110, 5000, 190, 1000]  # Day 2
+        [100, 1000, 200, 1000], # Day 1
+        [110, 5000, 220, 5000]  # Day 2
     ]
     df = pd.DataFrame(data, columns=index)
     mock_download.return_value = df

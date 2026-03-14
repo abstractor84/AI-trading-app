@@ -33,6 +33,10 @@ def test_sentinel_macro_keywords():
 
 def test_trade_history_query(db_session):
     """Verify that the 90-day trade history query logic works correctly."""
+    # Professional naive UTC comparison to match models.py
+    from models import utc_now_naive
+    now = utc_now_naive()
+    
     # Create a trade from 45 days ago
     old_trade = Trade(
         id="test-old",
@@ -41,8 +45,8 @@ def test_trade_history_query(db_session):
         quantity=10,
         entry_price=2500,
         status="CLOSED",
-        timestamp=datetime.now() - timedelta(days=45),
-        close_time=datetime.now() - timedelta(days=45),
+        timestamp=now - timedelta(days=45),
+        close_time=now - timedelta(days=45),
         pnl=100.0
     )
     # Create a trade from 120 days ago (should be excluded)
@@ -53,8 +57,8 @@ def test_trade_history_query(db_session):
         quantity=5,
         entry_price=3000,
         status="CLOSED",
-        timestamp=datetime.now() - timedelta(days=120),
-        close_time=datetime.now() - timedelta(days=120),
+        timestamp=now - timedelta(days=120),
+        close_time=now - timedelta(days=120),
         pnl=50.0
     )
     
@@ -64,7 +68,7 @@ def test_trade_history_query(db_session):
     
     # Simulate the query from ws_handler.py
     days = 90
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = now - timedelta(days=days)
     
     trades = db_session.query(Trade).filter(
         Trade.status == "CLOSED",

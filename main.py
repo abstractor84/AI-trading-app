@@ -55,9 +55,6 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(bg_engine.run())
     yield
     task.cancel()
-    if os.getenv("SIMULATION", "false").lower() == "true":
-        logger.warning("SIMULATION mode detected. Cleaning up DB tables...")
-        wipe_all_data()
 
 app = FastAPI(title="AI Trading Companion V2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")

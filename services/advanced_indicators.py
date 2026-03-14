@@ -133,10 +133,15 @@ class LorentzianClassifier:
 
         features = self.prepare_features(df, use_volatility=params.get('use_volatility', 'true') == 'true')
         
-        # If not enough features even for lookback+k, return empty/neutral
-        if features is None or len(features) < lookback + k:
+        # If not enough features even for basic k, return empty/neutral
+        if features is None or len(features) < k:
             start_i = max(0, len(df) - window)
             return [{"time": int(df.index[i].timestamp()), "signal": 0, "score": 0} for i in range(start_i, len(df))]
+
+        # Adaptive Lookback: Don't fail if we have fewer bars than 2000
+        # This is CRITICAL for 5-day charts which only have ~375 bars
+        actual_lookback = min(len(features) - k - 1, lookback)
+        if actual_lookback < k: actual_lookback = k # Minimum safety
 
         knn_features = ['rsi', 'wt', 'adx', 'cci', 'vol']
         vals = features[knn_features].values
@@ -145,19 +150,29 @@ class LorentzianClassifier:
         # Scaling for distance-based ML
         scaled_vals = self.scaler.fit_transform(vals)
         
-        # Define window relative to features
-        feat_start_idx = len(features) - window
-        if feat_start_idx < 0: feat_start_idx = 0
+        # SKEPTIC: Ensure we have a training pool.
+        # If df is small, we should still produce signals for the latest bars.
+        # Logic: train_pool = actual_lookback, signal_window = remaining (up to 'window')
+        total_len = len(features)
         
-        # Ensure we have enough lookback
-        if feat_start_idx < lookback:
-            feat_start_idx = lookback
+        # We need at least actual_lookback for training and 1 for query
+        if total_len <= actual_lookback:
+            actual_lookback = int(total_len * 0.7) # Use 70% for training
+            if actual_lookback < k: 
+                start_i = max(0, len(df) - window)
+                return [{"time": int(df.index[i].timestamp()), "signal": 0, "score": 0} for i in range(start_i, len(df))]
+
+        feat_start_idx = total_len - window
+        if feat_start_idx < actual_lookback:
+            feat_start_idx = actual_lookback
             
         results = []
         
         # ML Training Pool
-        train_end = feat_start_idx
-        train_start = max(0, train_end - lookback)
+        # TV Parity: We want to train on history and query on the requested window.
+        # But we must ensure signals are available for ALL bars in the window if possible.
+        train_end = total_len - 1
+        train_start = max(0, train_end - actual_lookback)
         
         X_train = scaled_vals[train_start:train_end]
         if len(X_train) < k:
@@ -178,36 +193,66 @@ class LorentzianClassifier:
         model = NearestNeighbors(n_neighbors=k, metric='manhattan', algorithm='auto')
         model.fit(X_train)
         
-        X_query = scaled_vals[feat_start_idx:]
+        # Query exactly the requested window
+        query_start_idx = total_len - window
+        if query_start_idx < 0: query_start_idx = 0
         
-        if len(X_query) == 0:
-            return []
-            
+        X_query = scaled_vals[query_start_idx:]
         distances, neighbor_indices = model.kneighbors(X_query)
         
         ema50 = features['ema50'].values
         st_dir = features['st_dir'].values
         adx = features['adx'].values
         
-        for i, feat_pos in enumerate(range(feat_start_idx, len(features))):
+        results = []
+        for i in range(len(X_query)):
+            feat_pos = query_start_idx + i
+            if feat_pos >= len(indices): break
+            
             neigh_idx = neighbor_indices[i]
-            # Gaussian Kernel Weighting
+            # Gaussian Kernel Weighting for distance-based probability
             weights = np.exp(-distances[i])
             scores = y_train[neigh_idx] * weights
             score = np.sum(scores) / np.sum(weights) if np.sum(weights) > 0 else 0
             
             signal = 0
-            if score >= threshold and closes[feat_pos] > ema50[feat_pos] and st_dir[feat_pos] == 1 and adx[feat_pos] > 20: signal = 1
-            elif score <= -threshold and closes[feat_pos] < ema50[feat_pos] and st_dir[feat_pos] == -1 and adx[feat_pos] > 20: signal = -1
-            
+            if score >= threshold and closes[feat_pos] > ema50[feat_pos] and st_dir[feat_pos] == 1 and adx[feat_pos] > 20: 
+                signal = 1
+            elif score <= -threshold and closes[feat_pos] < ema50[feat_pos] and st_dir[feat_pos] == -1 and adx[feat_pos] > 20: 
+                signal = -1
+                
             results.append({
                 "time": int(indices[feat_pos].timestamp()),
                 "signal": int(signal),
                 "score": round(float(score), 2)
             })
             
+        # Ensure we return EXACTLY window results
+        if len(results) < window:
+            padding_needed = window - len(results)
+            # SKEPTIC: Padding must not exceed available data in df.index
+            # We use indices from the actual df to maintain time continuity
+            max_available = len(df.index)
+            actual_pad_count = min(padding_needed, max_available - len(results))
+            
+            pad_list = []
+            if actual_pad_count > 0:
+                for j in range(0, actual_pad_count):
+                    try:
+                        # Defensive check: j must be a valid index for df.index
+                        if j < max_available:
+                            pad_list.append({
+                                "time": int(df.index[j].timestamp()),
+                                "signal": 0,
+                                "score": 0
+                            })
+                    except Exception as e:
+                        logger.debug(f"Padding index error at {j}: {e}")
+                        continue
+            results = pad_list + results
+
         logger.debug(f"Lorentzian ML finished in {time.time() - start_time:.4f}s")
-        return results
+        return results[:window] # Final slice safety
 
 
 class AdaptiveSuperTrend:

@@ -49,7 +49,7 @@ def test_03_upstox_pill_status(page: Page):
 
 def test_04_ai_quota_loads(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
-    expect(page.locator("#ai-calls-badge")).to_be_visible()
+    expect(page.locator("#ds-quota-text")).to_be_visible()
 
 def test_05_market_phase_rendered(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
@@ -62,22 +62,23 @@ def test_05_market_phase_rendered(page: Page):
 def test_06_scan_button_triggers_scan(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
     page.click("#scan-btn")
-    page.wait_for_timeout(5000)
-    expect(page.locator("#scan-btn")).to_have_text("Scanning...", timeout=3000)
+    expect(page.locator("#scan-btn")).to_have_text("Scanning...")
 
 def test_07_scan_results_contain_sc_tickers(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
     page.click("#scan-btn")
+    # Wait for results to appear in simulation
     page.wait_for_timeout(5000)
-    expect(page.locator(".sc-ticker").first).to_be_visible(timeout=30000)
+    expect(page.locator(".aih-ticker").first).to_be_visible(timeout=30000)
 
 def test_08_scan_results_tickers_are_clickable(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
     page.click("#scan-btn")
     page.wait_for_timeout(5000)
-    ticker = page.locator(".sc-ticker").first
+    ticker = page.locator(".aih-ticker").first
     expect(ticker).to_be_visible(timeout=30000)
-    expect(ticker).to_have_css("cursor", "pointer")
+    ticker.click()
+    expect(page.locator("#chart-modal")).to_be_visible()
 
 def test_09_scan_results_ltp_is_rendered(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
@@ -168,9 +169,8 @@ def test_31_st_shading_renders_successfully(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
     page.evaluate("openChart('TCS')")
     expect(page.locator("#legend-ltp")).to_contain_text("LTP:", timeout=20000)
-    has_st_up = page.evaluate("appState.series.stUp !== null")
-    has_st_down = page.evaluate("appState.series.stDown !== null")
-    assert has_st_up or has_st_down, "SuperTrend lines were not properly initialized"
+    has_st = page.evaluate("appState.series.stLine !== null")
+    assert has_st, "SuperTrend line was not properly initialized"
 
 def test_32_st_config_gear_opens_modal(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")

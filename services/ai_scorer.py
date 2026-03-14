@@ -39,6 +39,7 @@ class AIAdvisorService:
     def __init__(self):
         self.google_key = os.getenv("GEMINI_API_KEY")
         self.groq_key = os.getenv("GROQ_API_KEY")
+        self.sambanova_key = os.getenv("SAMBA_API_KEY")
 
         if self.google_key:
             self.google_client = genai.Client(api_key=self.google_key)
@@ -306,46 +307,27 @@ OUTPUT: Strictly valid JSON:
 
     def list_available_models(self, provider: str) -> list[dict]:
         """
-        Dynamically list models from the provider API and filter for 3 optimal ones.
-        Benchmarks: Reasoning, Latency, and Cost.
+        Returns hardcoded top 3 optimal models per provider to save API quota.
+        Benchmarks: Reasoning Accuracy (Finance), Latency, and Token Cost.
         """
-        try:
-            if provider == "google" and self.google_key:
-                models = self.google_client.models.list()
-                # 2026 Selection: Flash 2.0 (Scan), Pro 1.5 (Review), Pro 3.1 (Exit)
-                # Filter for these specific benchmark leaders
-                selection = [
-                    {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (Fast Scan)"},
-                    {"value": "gemini-1.5-pro", "label": "Gemini 1.5 Pro (Balanced Review)"},
-                    {"value": "gemini-3.1-pro", "label": "Gemini 3.1 Pro (Deep Reasoning)"}
-                ]
-                return selection
-            
-            elif provider == "groq" and self.groq_key:
-                import requests
-                resp = requests.get("https://api.groq.com/openai/v1/models", 
-                                 headers={"Authorization": f"Bearer {self.groq_key}"}, timeout=5)
-                if resp.status_code == 200:
-                    all_m = [m["id"] for m in resp.json().get("data", [])]
-                    # Filter for top 3 Llama variants
-                    top_3 = []
-                    if "llama-3.3-70b-versatile" in all_m: top_3.append({"value": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Best)"})
-                    if "llama-3.1-8b-instant" in all_m: top_3.append({"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (Fast)"})
-                    if "mixtral-8x7b-32768" in all_m: top_3.append({"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B (Robust)"})
-                    return top_3[:3]
-            
-            elif provider == "sambanova" and self.samba_key:
-                # SambaNova SN50 Optimized Selection
-                return [
-                    {"value": "Meta-Llama-3.3-70B-Instruct", "label": "Llama 3.3 70B (SN50 Optimized)"},
-                    {"value": "Meta-Llama-3.1-8B-Instruct", "label": "Llama 3.1 8B (Low Latency)"},
-                    {"value": "Llama-3.2-3B-Instruct", "label": "Llama 3.2 3B (Ultra Fast)"}
-                ]
-        except Exception as e:
-            logger.warning(f"Failed to list models for {provider}: {e}")
-        
-        # Static fallback if API is unreachable
-        return [{"value": "default", "label": "Default Model"}]
+        models = {
+            "google": [
+                {"value": "gemini-2.0-flash", "label": "Gemini 2.0 Flash (Fast Scan)"},
+                {"value": "gemini-1.5-pro", "label": "Gemini 1.5 Pro (Balanced Review)"},
+                {"value": "gemini-3.1-pro", "label": "Gemini 3.1 Pro (Deep Reasoning)"}
+            ],
+            "groq": [
+                {"value": "llama-3.3-70b-versatile", "label": "Llama 3.3 70B (Best Analysis)"},
+                {"value": "llama-3.1-8b-instant", "label": "Llama 3.1 8B (Low Latency)"},
+                {"value": "mixtral-8x7b-32768", "label": "Mixtral 8x7B (Robust MoE)"}
+            ],
+            "sambanova": [
+                {"value": "Meta-Llama-3.3-70B-Instruct", "label": "Llama 3.3 70B (Deep Scan)"},
+                {"value": "Meta-Llama-3.1-405B-Instruct", "label": "Llama 3.1 405B (Ultra Accuracy)"},
+                {"value": "Meta-Llama-3.1-8B-Instruct", "label": "Llama 3.1 8B (Fast Analysis)"}
+            ]
+        }
+        return models.get(provider.lower(), [{"value": "default", "label": "Default Model"}])
 
     def _call_google(self, model_name: str, prompt: str) -> dict:
         """Call Google Gemini API."""

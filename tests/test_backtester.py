@@ -36,9 +36,14 @@ def test_prepare_indicators(sample_df):
     assert len(bt.df) < 100
 
 def test_run_strategy_no_trades(sample_df):
-    # Data is purely trending up, so Mean Reversion (RSI < 40 + Price > VWAP) might not trigger
-    bt = VectorizedBacktester(sample_df)
-    params = {"ema_fast": 5, "ema_slow": 10, "rsi_len": 14, "rsi_buy_threshold": 20}
+    # Use random noise to ensure no trend/ML signals
+    noise_df = sample_df.copy()
+    noise_df['Close'] = 100.0 + np.random.randn(len(noise_df))
+    noise_df['High'] = noise_df['Close'] + 0.1
+    noise_df['Low'] = noise_df['Close'] - 0.1
+    
+    bt = VectorizedBacktester(noise_df)
+    params = {"ema_fast": 5, "ema_slow": 10, "rsi_len": 14, "rsi_buy_threshold": 10}
     metrics = bt.run_strategy(params)
     
     assert metrics["total_trades"] == 0

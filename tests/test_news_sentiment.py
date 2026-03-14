@@ -130,12 +130,13 @@ def test_score_sentiment_all_providers(mock_post):
     mock_post.return_value = mock_res
     
     # Test Groq dispatch
-    res = svc.score_sentiment([{"title": "H1"}], provider="groq")
-    assert res["sentiment"] == "POSITIVE"
-    
-    # Test Samba dispatch
-    res = svc.score_sentiment([{"title": "H1"}], provider="sambanova")
-    assert res["sentiment"] == "POSITIVE"
+    with patch("services.news_sentiment.quota_svc.check_quota", return_value={"can_call": True}):
+        res = svc.score_sentiment([{"title": "H1"}], provider="groq")
+        assert res["sentiment"] == "POSITIVE"
+        
+        # Test Samba dispatch
+        res = svc.score_sentiment([{"title": "H1"}], provider="sambanova")
+        assert res["sentiment"] == "POSITIVE"
 
 def test_score_sentiment_exception_fallback():
     svc = NewsSentimentService()

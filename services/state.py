@@ -6,6 +6,7 @@ and session data. Enhanced for V2 with phase-aware trade fields.
 import json
 import logging
 import uuid
+import os
 from datetime import datetime, timedelta
 
 from database import SessionLocal
@@ -43,6 +44,7 @@ class AppState:
         self.ai_advisor_message = None  # Current AI guidance
         self.ai_scans_today = []        # Store last 50 recommendations for historical analysis
         self.action_timeline = []  # Chronological log of events
+        self.simulation_mode = os.getenv("SIMULATION", "false").lower() == "true"
 
         self._load_from_db()
 
@@ -114,24 +116,26 @@ class AppState:
         """Reset state if it's a new day in IST. Saves summary before wiping."""
         import pytz
         from models import DailySummary
-        from database import SessionLocal
         ist = pytz.timezone("Asia/Kolkata")
-        current_date = datetime.now(ist).date()
+        now_ist = datetime.now(ist)
+        current_date = now_ist.date()
+
         if current_date > self.last_reset_date:
             logger.info(f"Midnight (IST) passed: {current_date} > {self.last_reset_date}. Saving summary...")
-            
+            date_str = self.last_reset_date.strftime("%Y-%m-%d")
+
             # Save Summary
             total_pnl = sum(t.get('pnl', 0) for t in self.closed_trades)
             wins = sum(1 for t in self.closed_trades if t.get('pnl', 0) > 0)
             losses = sum(1 for t in self.closed_trades if t.get('pnl', 0) < 0)
-            
+
             with SessionLocal() as db:
                 try:
-                    summary = db.query(DailySummary).filter(DailySummary.date == self.last_reset_date).first()
+                    summary = db.query(DailySummary).filter(DailySummary.date == date_str).first()
                     if not summary:
-                        summary = DailySummary(date=self.last_reset_date)
+                        summary = DailySummary(date=date_str)
                         db.add(summary)
-                    
+
                     summary.total_trades = len(self.closed_trades)
                     summary.wins = wins
                     summary.losses = losses
@@ -149,7 +153,6 @@ class AppState:
             self.action_timeline.clear()
             self._load_from_db()
             self.last_reset_date = current_date
-
     def update_settings(self, capital: float, max_loss: float,
                         search_engine: str = 'tavily', data_provider: str = 'upstox',
                         fallback_data: bool = True, fallback_search: bool = True,

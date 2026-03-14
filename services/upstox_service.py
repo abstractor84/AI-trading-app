@@ -60,6 +60,12 @@ def _load_instrument_cache() -> None:
                     _instrument_cache[f"{base}.NS"] = key
 
         logger.info(f"Upstox: Loaded {len(_instrument_cache)} NSE instruments.")
+        
+        # SKEPTIC: Manually inject GIFT Nifty which is often missing from public BOD list but available via API
+        _instrument_cache["GIFT NIFTY"] = "NSE_INDEX|GIFT Nifty"
+        _instrument_cache["GIFT NIFTY.NS"] = "NSE_INDEX|GIFT Nifty"
+        _reverse_instrument_cache["NSE_INDEX|GIFT Nifty"] = "GIFT NIFTY"
+        
         _last_cache_load = now
     except Exception as e:
         logger.error(f"Upstox: Failed to load instrument cache: {e}")
@@ -67,6 +73,9 @@ def _load_instrument_cache() -> None:
 
 def get_instrument_key(ticker: str) -> str | None:
     """Resolve a Yahoo Finance ticker like 'RELIANCE.NS' to an Upstox key."""
+    if not ticker: return None
+    # SKEPTIC: If it's already a key (contains |), return it.
+    if "|" in ticker: return ticker
     _load_instrument_cache()
     return _instrument_cache.get(ticker.upper())
 
@@ -229,6 +238,7 @@ class UpstoxService:
         encoded_key = requests.utils.quote(instrument_key, safe='')
         
         url = f"{self.BASE_URL}/historical-candle/{encoded_key}/{unit}/{num_interval}/{to_date}/{from_date}"
+        logger.debug(f"SKEPTIC: Upstox Historical Call for {instrument_key}")
         
         try:
             resp = requests.get(url, headers=self._headers(), timeout=8)
@@ -237,6 +247,9 @@ class UpstoxService:
                 return self._candles_to_df(candles)
             elif resp.status_code == 401:
                 logger.error("Upstox: Unauthorised — access token expired or invalid.")
+            elif resp.status_code == 400 and "INDEX" in instrument_key:
+                # SKEPTIC: Known restriction for some indices on Upstox
+                logger.warning(f"SKEPTIC: Upstox Historical Data restricted for {instrument_key} (400). Skipping.")
             else:
                 logger.error(f"Upstox historical error {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
@@ -250,22 +263,28 @@ class UpstoxService:
         if not self.is_authenticated:
             return None
 
+        # SKEPTIC: Upstox V3 is strict about plural units.
+        if unit == "minute": unit = "minutes"
+        if unit == "hour": unit = "hours"
+        if unit == "day": unit = "days"
+        if unit == "week": unit = "weeks"
+        if unit == "month": unit = "months"
+
         key = get_instrument_key(ticker)
         if not key:
             return None
 
         # API Limits (V3):
-        # minutes: 1 month
-        # hours: 1 quarter
         if unit == "minutes" and days > 20: days = 20
         if unit == "hours" and days > 90: days = 90
 
         frames = []
 
-        # Today's intraday data
-        td = self.fetch_intraday_candles(key, interval, unit)
-        if td is not None and not td.empty:
-            frames.append(td)
+        # SKEPTIC: Intraday endpoint is only for sub-day granularities.
+        if unit in ["minutes", "hours"]:
+            td = self.fetch_intraday_candles(key, interval, unit)
+            if td is not None and not td.empty:
+                frames.append(td)
 
         # Historical data for prior days
         if days >= 1:
@@ -282,30 +301,29 @@ class UpstoxService:
         return combined
 
     def fetch_market_quote(self, instrument_key: str) -> dict | None:
-        """Fetch real-time snapshot quote using REST API (V3). Returns V2-compatible structure for backward compat."""
+        """Fetch real-time snapshot quote using REST API (V3). Returns V2-compatible structure."""
         if not self.is_authenticated:
             return None
         
-        url = f"{self.BASE_URL}/market-quote/ltp?instrument_key={requests.utils.quote(instrument_key, safe='')}"
+        # SKEPTIC: We use the 'quotes' endpoint instead of 'ltp' to get 'close' price for change calculation
+        url = f"{self.BASE_URL}/market-quote/quotes?instrument_key={requests.utils.quote(instrument_key, safe='')}"
         try:
             resp = requests.get(url, headers=self._headers(), timeout=5)
             if resp.status_code == 200:
                 raw_data = resp.json().get("data", {})
                 
-                # V3 returns flat dict: {"NSE_EQ|RELIANCE": {"last_price": ...}}
-                # We normalize to V2 expected by some tests: {"data": {"NSE_EQ|RELIANCE": {"last_price": ...}}}
-                
-                # Check for standard key or alt variant
+                # Check for standard key or alt variant (often indices use : instead of | in results)
                 alt_key = instrument_key.replace("|", ":")
                 target_key = instrument_key if instrument_key in raw_data else alt_key if alt_key in raw_data else None
                 
                 if target_key:
-                    # Some tests expect the whole response with "data" key
                     normalized = {
                         "status": "success",
                         "data": { instrument_key: raw_data[target_key] }
                     }
                     return normalized
+            else:
+                logger.error(f"Upstox market quote error {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             logger.error(f"Upstox fetch_market_quote exception: {e}")
         return None

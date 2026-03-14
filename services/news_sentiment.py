@@ -2,6 +2,8 @@ import requests
 from bs4 import BeautifulSoup
 import logging
 import re
+import asyncio
+import threading
 from google import genai
 import os
 import json
@@ -11,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+_ddgs_lock = threading.Lock()
 
 # Singleton QuotaService
 quota_svc = QuotaService()
@@ -79,18 +82,21 @@ def _tavily_fetch(query: str) -> list[dict]:
 
 
 def _ddgs_fetch(query: str) -> list[dict]:
+    """Synchronous wrapper for DDGS news fetching with thread safety."""
     try:
         from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            # Use news() — more targeted for financial news than text()
-            results = list(ddgs.news(query, max_results=5))
-            if results:
-                return [{"title": r['title'], "url": r['link']} for r in results]
-            # fallback: broader text search without timelimit
-            results = list(ddgs.text(query, max_results=5))
-            return [{"title": r['title'], "url": r['href']} for r in results]
+        with _ddgs_lock:
+            with DDGS() as ddgs:
+                # Use news() — more targeted for financial news than text()
+                results = list(ddgs.news(query, max_results=5))
+                if results:
+                    # Safe Extraction with Fallbacks
+                    return [{"title": r.get('title', 'No Title'), "url": r.get('link', r.get('url', '#'))} for r in results]
+                # fallback: broader text search without timelimit
+                results = list(ddgs.text(query, max_results=5))
+                return [{"title": r.get('title', 'No Title'), "url": r.get('href', r.get('link', '#'))} for r in results]
     except Exception as e:
-        logger.error(f"DDGS fetch failed: {e}")
+        logger.error(f"SKEPTIC: DDGS fetch failed for {query}: {e}")
     return []
 
 
@@ -108,6 +114,10 @@ class NewsSentimentService:
 
         if not self.tavily_key:
             logger.warning("TAVILY_API_KEY not found in .env. Tavily search will be skipped.")
+
+    async def fetch_news_async(self, query: str) -> list[dict]:
+        """Asynchronous entry point for DDGS fetching."""
+        return await asyncio.to_thread(_ddgs_fetch, query)
 
     def fetch_news(self, ticker: str, search_engine: str = "gemini", fallback: bool = False) -> list[dict]:
         """

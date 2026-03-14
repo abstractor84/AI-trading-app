@@ -529,6 +529,7 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     })
 
             elif action == "run_backtest":
+                logger.info(f"SKEPTIC: Received backtest request for {command.get('ticker')}")
                 # Run backtester with user parameters
                 await manager.broadcast({
                     "type": "notification",
@@ -542,17 +543,21 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
 
                     ta_svc = TechnicalAnalysisService()
                     ticker = command.get('ticker', 'RELIANCE.NS')
-                    days = command.get('days', 30)
+                    
+                    # Handle either 'days' or 'period' (e.g. '30d')
+                    period = command.get('period', '30d')
+                    days = int(period.replace('d', '')) if isinstance(period, str) else command.get('days', 30)
+                    
                     capital = command.get('capital', 100000)
                     params = command.get('params', {})
 
-                    period = f"{days}d"
-                    df = await asyncio.to_thread(ta_svc.fetch_ohlcv, ticker, period, "5m")
+                    period_str = f"{days}d"
+                    df = await asyncio.to_thread(ta_svc.fetch_ohlcv, ticker, period_str, "5m")
 
                     if df is None or df.empty:
                         raise ValueError(f"No data for {ticker}")
 
-                    bt = VectorizedBacktester(df, initial_capital=capital)
+                    bt = VectorizedBacktester(df, initial_capital=capital, is_simulation=state.simulation_mode)
                     results = await asyncio.to_thread(bt.run_strategy, params)
 
                     # Clean trade_log for JSON serialization
