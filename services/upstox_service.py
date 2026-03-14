@@ -122,6 +122,17 @@ class UpstoxService:
             "Authorization": f"Bearer {token}",
         }
 
+    def _handle_api_error(self, resp: requests.Response, context: str):
+        """Centralized API error handling with auth-state tracking."""
+        if resp.status_code == 401:
+            logger.error(f"Upstox Auth Failure ({context}): Token invalid or expired. Switching to fallback mode.")
+            self._is_authenticated = False
+        elif resp.status_code == 400:
+            # We already log specific 400s in callers, but this catches leftovers
+            logger.debug(f"Upstox 400 ({context}): {resp.text[:200]}")
+        else:
+            logger.error(f"Upstox API Error {resp.status_code} ({context}): {resp.text[:200]}")
+
     def reload_token(self) -> None:
         """Reload the token from environment variables (useful after manual login)."""
         self.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
@@ -211,7 +222,7 @@ class UpstoxService:
                 candles = resp.json().get("data", {}).get("candles", [])
                 return self._candles_to_df(candles)
             else:
-                logger.error(f"Upstox intraday error {resp.status_code}: {resp.text[:200]}")
+                self._handle_api_error(resp, "intraday")
         except Exception as e:
             logger.error(f"Upstox fetch_intraday_candles exception: {e}")
         return None
@@ -245,13 +256,11 @@ class UpstoxService:
             if resp.status_code == 200:
                 candles = resp.json().get("data", {}).get("candles", [])
                 return self._candles_to_df(candles)
-            elif resp.status_code == 401:
-                logger.error("Upstox: Unauthorised — access token expired or invalid.")
             elif resp.status_code == 400 and "INDEX" in instrument_key:
                 # SKEPTIC: Known restriction for some indices on Upstox
                 logger.warning(f"SKEPTIC: Upstox Historical Data restricted for {instrument_key} (400). Skipping.")
             else:
-                logger.error(f"Upstox historical error {resp.status_code}: {resp.text[:200]}")
+                self._handle_api_error(resp, "historical")
         except Exception as e:
             logger.error(f"Upstox fetch_historical_candles exception: {e}")
         return None
@@ -322,8 +331,10 @@ class UpstoxService:
                         "data": { instrument_key: raw_data[target_key] }
                     }
                     return normalized
+                else:
+                    logger.warning(f"Upstox: {instrument_key} not found in quote data.")
             else:
-                logger.error(f"Upstox market quote error {resp.status_code}: {resp.text[:200]}")
+                self._handle_api_error(resp, "market_quote")
         except Exception as e:
             logger.error(f"Upstox fetch_market_quote exception: {e}")
         return None
