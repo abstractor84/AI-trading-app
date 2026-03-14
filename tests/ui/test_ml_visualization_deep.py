@@ -46,12 +46,12 @@ def test_ml_indicator_visibility_and_legend_sync(page: Page):
     page.check("#toggle-st")
     
     # We wait for the text to change from "--"
-    expect(page.locator("#legend-st")).to_contain_text("ST (", timeout=10000)
+    expect(page.locator("#legend-st")).to_contain_text("ST:", timeout=10000)
     expect(page.locator("#legend-st")).not_to_contain_text("--", timeout=5000)
     
     # Check if series object exists in state
-    has_st = page.evaluate("appState.series.stLine !== null")
-    assert has_st, "ST series should be initialized"
+    has_st = page.evaluate("appState.series.stUp !== null && appState.series.stDown !== null")
+    assert has_st, "ST series (Up/Down) should be initialized"
     
     # 2. Test Lorentzian (LZ) markers
     page.check("#toggle-lz")
@@ -64,8 +64,8 @@ def test_ml_indicator_visibility_and_legend_sync(page: Page):
     # 3. Test KNN Projection
     page.check("#toggle-knn")
     page.wait_for_timeout(1000)
-    has_knn = page.evaluate("appState.series.projLine !== null")
-    assert has_knn, "KNN Projection series should be initialized"
+    has_knn = page.evaluate("appState.series.projLine !== null && appState.series.knnUp !== null")
+    assert has_knn, "KNN Projection and Trend series should be initialized"
 
 def test_ml_signal_positioning_relative_to_ohlc(page: Page):
     """

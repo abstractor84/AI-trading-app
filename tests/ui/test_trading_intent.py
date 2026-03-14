@@ -98,7 +98,7 @@ def test_ml_signal_visibility(page: Page):
     
     # Check Legend Adaptiveness
     expect(page.locator("#chart-legend")).to_contain_text("ADX:", timeout=5000)
-    expect(page.locator("#chart-legend")).to_contain_text("ST (", timeout=5000)
+    expect(page.locator("#chart-legend")).to_contain_text("ST:", timeout=5000)
 
 def test_upstox_data_consistency_across_intervals(page: Page):
     """

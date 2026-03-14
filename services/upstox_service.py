@@ -136,6 +136,7 @@ class UpstoxService:
     def reload_token(self) -> None:
         """Reload the token from environment variables (useful after manual login)."""
         self.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
+        self._is_authenticated = None # Reset so property re-evaluates
         # Validation will be checked on next API call or via validate_token()
 
     def validate_token(self) -> bool:

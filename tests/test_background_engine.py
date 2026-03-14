@@ -71,7 +71,8 @@ async def test_maybe_call_ai_scan(bg_engine, state):
          patch("background_engine.ta_svc.fetch_fundamentals") as mock_fund, \
          patch("background_engine.ta_svc.classify_signal") as mock_sig, \
          patch("background_engine.ai_advisor.scan_market") as mock_scan, \
-         patch("services.news_sentiment.NewsSentimentService") as mock_news:
+         patch("services.news_sentiment.NewsSentimentService") as mock_news, \
+         patch("services.quota_service.quota_svc.check_quota", return_value={"can_call": True}):
              
         mock_sch.return_value = {"prompt_type": "SCAN", "call_interval_mins": 5}
         mock_ta.return_value = {
@@ -165,7 +166,8 @@ async def test_maybe_call_ai_consensus_fail(bg_engine, state):
          patch("background_engine.ta_svc.classify_signal") as mock_sig, \
          patch("background_engine.ta_svc.fetch_ohlcv") as mock_fetch, \
          patch("background_engine.ai_advisor.scan_market") as mock_scan, \
-         patch("services.news_sentiment.NewsSentimentService") as mock_news:
+         patch("services.news_sentiment.NewsSentimentService") as mock_news, \
+         patch("services.quota_service.quota_svc.check_quota", return_value={"can_call": True}):
              
         mock_sch.return_value = {"prompt_type": "SCAN", "call_interval_mins": 5}
         mock_ta.return_value = {

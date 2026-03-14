@@ -352,7 +352,7 @@ class TechnicalAnalysisService:
         _status_cache["data"] = status
         return status
 
-    def get_chart_payload(self, ticker: str, interval: str = "5m"):
+    def get_chart_payload(self, ticker: str, interval: str = "5m", params: dict = None):
         """
         Unified method to prepare the complete V3 Chart Payload.
         Includes OHLC, Projections, and all ML Indicators.
@@ -360,6 +360,11 @@ class TechnicalAnalysisService:
         import os
         import time
         from services.price_projector import price_projector
+        
+        params = params or {}
+        st_params = params.get('st', {})
+        lz_params = params.get('lz', {})
+        knn_params = params.get('knn', {})
         from services.advanced_indicators import classifier, adaptive_st
 
         # 1. Simulation Check
@@ -385,7 +390,7 @@ class TechnicalAnalysisService:
                 "rsi_series": [{"time": c['time'], "value": 45.0 + (i%5)} for i, c in enumerate(mock_ohlc)],
                 "ml_adaptive_st": {"time": [c['time'] for c in mock_ohlc], "value": [98+i%2 for i in range(100)], "trend": [1]*50 + [-1]*50, "regime": [1]*33 + [2]*33 + [3]*34},
                 "ml_lorentzian": [{"time": c['time'], "signal": 1 if i % 20 == 0 else -1 if i % 25 == 0 else 0, "score": 0.5} for i, c in enumerate(mock_ohlc)],
-                "ml_knn": [{"time": c['time'], "value": 100+i%3, "trend": 1 if i%10 < 5 else -1} for i, c in enumerate(mock_ohlc)],
+                "ml_knn": [{"time": c['time'], "value": 100+i%3, "trend": 1 if i%10 < 5 else -1, "marker": 1 if i%10 == 0 else -1 if i%10 == 5 else 0} for i, c in enumerate(mock_ohlc)],
                 "vwap": 101.0,
                 "ema_9": 101.5,
                 "ema_21": 100.5,
@@ -431,9 +436,9 @@ class TechnicalAnalysisService:
         
         # 5. Compute ML Series
         from services.advanced_indicators import classifier, adaptive_st, knn_forecaster
-        lz_series = classifier.classify_series(df, window=500)
-        st_series = adaptive_st.calculate(df, window=500)
-        knn_series = knn_forecaster.get_historical_shading(df, window=500)
+        lz_series = classifier.classify_series(df, window=500, params=lz_params)
+        st_series = adaptive_st.calculate(df, window=500, params=st_params)
+        knn_series = knn_forecaster.get_historical_shading(df, window=500, params=knn_params)
         
         # 6. Extract ADX & RSI
         adx_series = []

@@ -37,6 +37,10 @@ def test_trade_history_query(db_session):
     from models import utc_now_naive
     now = utc_now_naive()
     
+    # CLEAR EXISTING DATA (Robustness)
+    db_session.query(Trade).delete()
+    db_session.commit()
+    
     # Create a trade from 45 days ago
     old_trade = Trade(
         id="test-old",

@@ -227,7 +227,7 @@ class SentinelService:
             def sync_fetch():
                 with _ddgs_lock:
                     with DDGS() as ddgs:
-                        results = list(ddgs.news(query, region="in-en", max_results=5))
+                        results = list(ddgs.news(query, region="in-en", max_results=20))
                         return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
             
             return await asyncio.to_thread(sync_fetch)
@@ -244,9 +244,10 @@ class SentinelService:
         """Fetch latest news titles and links via DDGS."""
         try:
             def get_news():
-                with DDGS() as ddgs:
-                    results = list(ddgs.news(query, max_results=5))
-                    return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
+                with _ddgs_lock:
+                    with DDGS() as ddgs:
+                        results = list(ddgs.news(query, max_results=20))
+                        return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
             
             return await asyncio.to_thread(get_news)
         except Exception as e:

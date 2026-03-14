@@ -74,7 +74,7 @@ def _tavily_fetch(query: str) -> list[dict]:
         return []
     try:
         from tavily import TavilyClient
-        res = TavilyClient(api_key=tavily_key).search(query=query, search_depth="basic", max_results=5)
+        res = TavilyClient(api_key=tavily_key).search(query=query, search_depth="basic", max_results=20)
         return [{"title": r['title'], "url": r['url']} for r in res.get('results', [])]
     except Exception as e:
         logger.error(f"Tavily fetch failed: {e}")
@@ -88,12 +88,12 @@ def _ddgs_fetch(query: str) -> list[dict]:
         with _ddgs_lock:
             with DDGS() as ddgs:
                 # Use news() — more targeted for financial news than text()
-                results = list(ddgs.news(query, max_results=5))
+                results = list(ddgs.news(query, max_results=20))
                 if results:
                     # Safe Extraction with Fallbacks
                     return [{"title": r.get('title', 'No Title'), "url": r.get('link', r.get('url', '#'))} for r in results]
                 # fallback: broader text search without timelimit
-                results = list(ddgs.text(query, max_results=5))
+                results = list(ddgs.text(query, max_results=20))
                 return [{"title": r.get('title', 'No Title'), "url": r.get('href', r.get('link', '#'))} for r in results]
     except Exception as e:
         logger.error(f"SKEPTIC: DDGS fetch failed for {query}: {e}")

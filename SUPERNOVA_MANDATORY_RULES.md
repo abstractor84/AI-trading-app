@@ -52,6 +52,7 @@ After **every** code change, fix, or feature implementation, a comprehensive Ske
 
 ## 7. Application Startup & Log Monitoring
 - **Startup Validation:** After any structural change or logic fix, the application MUST be started locally. The engineer must verify that the server reaches "Application startup complete" without tracebacks.
+- **Persistence Verification:** After startup, logs MUST be monitored for at least 2 minutes to ensure the process doesn't exit prematurely. Final verification MUST use `lsof -i :8000` (or the configured port) to confirm the listener is active before proceeding to tests.
 - **Log Monitoring:** uvicorn_latest.log MUST be monitored during startup and during test execution. Any "ERROR" or "WARNING" (especially 400/401/500 API errors) must be treated as a regression and resolved immediately. No fix is complete if the logs show persistent failures.
 
 ---

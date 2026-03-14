@@ -118,7 +118,8 @@ async def test_ws_trigger_scan(state, manager):
     with patch("services.technical_analysis.TechnicalAnalysisService") as mock_ta_cls, \
          patch("services.stock_discovery.StockDiscoveryService") as mock_disc_cls, \
          patch("services.ai_scorer.ai_advisor.scan_market") as mock_ai_scan, \
-         patch("services.news_sentiment.NewsSentimentService") as mock_news_cls:
+         patch("services.news_sentiment.NewsSentimentService") as mock_news_cls, \
+         patch("services.quota_service.quota_svc.check_quota", return_value={"can_call": True}):
              
         mock_disc = mock_disc_cls.return_value
         mock_disc._get_top_candidates.return_value = ["REL.NS"]

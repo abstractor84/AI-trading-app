@@ -237,6 +237,12 @@ class BackgroundEngine:
                     logger.info("No stocks passed the mathematical setup pre-filter. Skipping AI scan to save API limits.")
                     return  # Fast-exit right back out of the loop!
 
+                from services.quota_service import quota_svc
+                quota_check = quota_svc.check_quota(provider)
+                if not quota_check.get("can_call", True):
+                    logger.warning(f"Quota exhausted for {provider}. Skipping background AI scan.")
+                    return
+
                 logger.info(f"Passing {len(candidates)} mathematically validated Candidates to AI Scorer...")
                 raw_result = await asyncio.to_thread(
                     ai_advisor.scan_market, candidates,

@@ -10,15 +10,87 @@ const appState = {
     aiAdvisor: null, aiScansToday: [], actionTimeline: [], aiCallsToday: 0, aiCallsLimit: 7,
     chartInstance: null, adxChart: null, currentChartData: null,
     currentChartKey: null, currentInterval: '5m',
-    series: { candles: null, adxLine: null, rsiLine: null, stUp: null, stDown: null, knnLine: null, projLine: null, upperBand: null, lowerBand: null }
+    series: { candles: null, adxLine: null, rsiLine: null, stUp: null, stDown: null, knnUp: null, knnDown: null, projLine: null, upperBand: null, lowerBand: null },
+    indicatorSettings: {
+        st: { atr_period: 10, factor: 3.0, training_len: 100, p_low: 0.25, p_med: 0.5, p_high: 0.75 },
+        lz: { k: 8, lookback: 2000, threshold: 0.5, use_volatility: true },
+        knn: { k: 5, sequence_length: 15, window: 200 }
+    }
 };
 window.appState = appState;
 window.openChart = openChart;
 window.closeChart = closeChart;
 window.changeChartInterval = changeChartInterval;
 window.toggleIndicator = toggleIndicator;
+window.toggleIndicatorSettings = toggleIndicatorSettings;
+window.saveIndicatorSettings = saveIndicatorSettings;
 
 let chartRefreshTimer = null;
+
+// ─── AI Models Config ────────────────────────────────────────────────
+const AI_MODELS = {
+    google: [
+        {value: "gemini-3.1-pro", label: "Gemini 3.1 Pro (Deep Reasoning)"},
+        {value: "gemini-3-flash", label: "Gemini 3 Flash (Fast & Balanced)"},
+        {value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Large Context)"}
+    ],
+    groq: [
+        {value: "deepseek-r1-distill-llama-70b", label: "DeepSeek R1 (Complex Logic / Fast)"},
+        {value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (High Precision)"},
+        {value: "llama-3.1-8b-instant", label: "Llama 3.1 8B (High Freq / Cheap)"}
+    ],
+    sambanova: [
+        {value: "Meta-Llama-3.3-70B-Instruct", label: "Llama 3.3 70B (Deep Scan)"},
+        {value: "Meta-Llama-3.1-405B-Instruct", label: "Llama 3.1 405B (Ultra Accuracy)"},
+        {value: "Meta-Llama-3.1-8B-Instruct", label: "Llama 3.1 8B (Fast Analysis)"}
+    ]
+};
+
+function updateModelDropdown() {
+    const provider = document.getElementById('ai-provider-input')?.value;
+    const modelSelect = document.getElementById('ai-model-input');
+    if (provider && modelSelect && AI_MODELS[provider]) {
+        modelSelect.innerHTML = AI_MODELS[provider].map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+    }
+}
+
+// ─── Utility Functions ──────────────────────────────────────────────
+function showToast(msg, level='info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const t = document.createElement('div');
+    t.className = `toast toast-${level}`;
+    t.textContent = msg;
+    container.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+}
+
+function signalClass(signal) {
+    const s = (signal || '').toUpperCase();
+    if (s.includes('STRONG BUY')) return 'signal-strong-buy';
+    if (s.includes('BUY')) return 'signal-buy';
+    if (s.includes('STRONG SHORT')) return 'signal-strong-short';
+    if (s.includes('SHORT')) return 'signal-short';
+    return 'signal-neutral';
+}
+
+function rsiColor(rsi) {
+    if (rsi >= 70) return '#ef4444'; // Overbought
+    if (rsi <= 30) return '#22c55e'; // Oversold
+    return '#8b949e';
+}
+
+function fmt(val) {
+    if (val === undefined || val === null) return '--';
+    return Number(val).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function sentimentClass(label) {
+    const l = (label || '').toLowerCase();
+    if (l.includes('bullish')) return 'positive';
+    if (l.includes('bearish')) return 'negative';
+    return 'neutral';
+}
 
 // ─── WebSocket Initialization ───────────────────────────────────────
 const ws = new WebSocket(`ws://${window.location.host}/ws`);
@@ -40,6 +112,7 @@ function openChart(ticker) {
     
     // Reset state for new chart
     appState.currentChartData = { ohlc: [] };
+    appState.isFirstLoad = true; // For zoom handling
     
     const modal = document.getElementById('chart-modal');
     if (modal) {
@@ -65,7 +138,8 @@ function openChart(ticker) {
         ws.send(JSON.stringify({
             action: 'get_chart_data',
             ticker: cleanTicker,
-            interval: appState.currentInterval
+            interval: appState.currentInterval,
+            params: appState.indicatorSettings
         }));
     }
 
@@ -76,7 +150,8 @@ function openChart(ticker) {
             ws.send(JSON.stringify({
                 action: 'get_chart_data',
                 ticker: appState.currentChartKey,
-                interval: appState.currentInterval
+                interval: appState.currentInterval,
+                params: appState.indicatorSettings
             }));
         }
     }, 60000);
@@ -101,7 +176,8 @@ function closeChart() {
     appState.chartInstance = null;
     appState.adxChart = null;
     appState.series = {
-        candles: null, adxLine: null, rsiLine: null, stLine: null,
+        candles: null, adxLine: null, rsiLine: null, 
+        stUp: null, stDown: null, knnUp: null, knnDown: null,
         projLine: null, upperBand: null, lowerBand: null
     };
     
@@ -117,10 +193,11 @@ function closeChart() {
  */
 function changeChartInterval(interval) {
     appState.currentInterval = interval;
+    appState.isIntervalChange = true; // Prevent zoom on interval change
     
     // Update UI buttons
     document.querySelectorAll('.tf-btn').forEach(btn => {
-        if (btn.getAttribute('onclick')?.includes(`'${interval}'`)) {
+        if (btn.getAttribute('data-interval') === interval) {
             btn.classList.add('active');
         } else {
             btn.classList.remove('active');
@@ -131,7 +208,8 @@ function changeChartInterval(interval) {
         ws.send(JSON.stringify({
             action: 'get_chart_data',
             ticker: appState.currentChartKey,
-            interval: interval
+            interval: interval,
+            params: appState.indicatorSettings
         }));
     }
 }
@@ -143,6 +221,75 @@ function changeChartInterval(interval) {
 function toggleIndicator(indicator, show) {
     if (appState.currentChartData) {
         renderChart(appState.currentChartData);
+    }
+}
+
+/**
+ * Open settings modal for specific ML indicators.
+ */
+function toggleIndicatorSettings(indicator) {
+    const modal = document.getElementById(`${indicator}-settings`);
+    if (modal) {
+        modal.style.display = 'flex';
+        // Populate inputs from state
+        if (indicator === 'st') {
+            document.getElementById('st-atr-len').value = appState.indicatorSettings.st.atr_period;
+            document.getElementById('st-factor').value = appState.indicatorSettings.st.factor;
+            document.getElementById('st-train-len').value = appState.indicatorSettings.st.training_len;
+            document.getElementById('st-p-low').value = appState.indicatorSettings.st.p_low;
+            document.getElementById('st-p-med').value = appState.indicatorSettings.st.p_med;
+            document.getElementById('st-p-high').value = appState.indicatorSettings.st.p_high;
+        } else if (indicator === 'lz') {
+            document.getElementById('lz-k').value = appState.indicatorSettings.lz.k;
+            document.getElementById('lz-lookback').value = appState.indicatorSettings.lz.lookback;
+            document.getElementById('lz-threshold').value = appState.indicatorSettings.lz.threshold;
+            document.getElementById('lz-use-vol').checked = appState.indicatorSettings.lz.use_volatility;
+        } else if (indicator === 'knn') {
+            document.getElementById('knn-k').value = appState.indicatorSettings.knn.k;
+            document.getElementById('knn-seq-len').value = appState.indicatorSettings.knn.sequence_length;
+            document.getElementById('knn-window').value = appState.indicatorSettings.knn.window;
+        }
+    } else {
+        showToast(`${indicator.toUpperCase()} settings configuration coming in next update.`, 'info');
+    }
+}
+
+function saveIndicatorSettings(indicator) {
+    if (indicator === 'st') {
+        appState.indicatorSettings.st = {
+            atr_period: parseInt(document.getElementById('st-atr-len').value),
+            factor: parseFloat(document.getElementById('st-factor').value),
+            training_len: parseInt(document.getElementById('st-train-len').value),
+            p_low: parseFloat(document.getElementById('st-p-low').value),
+            p_med: parseFloat(document.getElementById('st-p-med').value),
+            p_high: parseFloat(document.getElementById('st-p-high').value)
+        };
+    } else if (indicator === 'lz') {
+        appState.indicatorSettings.lz = {
+            k: parseInt(document.getElementById('lz-k').value),
+            lookback: parseInt(document.getElementById('lz-lookback').value),
+            threshold: parseFloat(document.getElementById('lz-threshold').value),
+            use_volatility: document.getElementById('lz-use-vol').checked
+        };
+    } else if (indicator === 'knn') {
+        appState.indicatorSettings.knn = {
+            k: parseInt(document.getElementById('knn-k').value),
+            sequence_length: parseInt(document.getElementById('knn-seq-len').value),
+            window: parseInt(document.getElementById('knn-window').value)
+        };
+    }
+
+    document.getElementById(`${indicator}-settings`).style.display = 'none';
+    showToast(`${indicator.toUpperCase()} settings updated`, 'success');
+
+    // Trigger refresh
+    if (appState.currentChartKey && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            action: 'get_chart_data',
+            ticker: appState.currentChartKey,
+            interval: appState.currentInterval,
+            params: appState.indicatorSettings
+        }));
     }
 }
 
@@ -169,7 +316,8 @@ function initChartInstance(container, adxContainer) {
         timeScale: {
             borderColor: 'rgba(139,148,158,0.2)',
             timeVisible: true,
-            secondsVisible: false
+            secondsVisible: false,
+            rightOffset: 20
         }
     };
 
@@ -179,19 +327,24 @@ function initChartInstance(container, adxContainer) {
         wickUpColor: '#22c55e', wickDownColor: '#ef4444'
     });
     
-    // Adaptive SuperTrend (Split for color change)
+    // Adaptive SuperTrend (TV Parity: No extra Y-axis labels)
     appState.series.stUp = appState.chartInstance.addLineSeries({
-        color: '#22c55e', lineWidth: 2, title: 'ST Up',
-        lastValueVisible: false, priceLineVisible: false
+        color: '#22c55e', lineWidth: 2, title: '', 
+        priceLineVisible: false, lastValueVisible: false
     });
     appState.series.stDown = appState.chartInstance.addLineSeries({
-        color: '#ef4444', lineWidth: 2, title: 'ST Down',
-        lastValueVisible: false, priceLineVisible: false
+        color: '#ef4444', lineWidth: 2, title: '',
+        priceLineVisible: false, lastValueVisible: false
     });
 
-    // KNN Trend Line
-    appState.series.knnLine = appState.chartInstance.addLineSeries({
-        color: '#facc15', lineWidth: 1, lineStyle: 2, title: 'KNN Trend'
+    // KNN Trend Lines (TV Parity: No extra Y-axis labels)
+    appState.series.knnUp = appState.chartInstance.addLineSeries({
+        color: '#a855f7', lineWidth: 2, title: '', 
+        priceLineVisible: false, lastValueVisible: false
+    });
+    appState.series.knnDown = appState.chartInstance.addLineSeries({
+        color: '#f97316', lineWidth: 2, title: '',
+        priceLineVisible: false, lastValueVisible: false
     });
 
     appState.adxChart = LightweightCharts.createChart(adxContainer, {
@@ -204,17 +357,17 @@ function initChartInstance(container, adxContainer) {
     // Sync TimeScales
     appState.chartInstance.timeScale().subscribeVisibleTimeRangeChange(range => {
         try {
-            if (range && range.from && range.to && appState.adxChart) {
+            if (range && range.from !== null && range.to !== null && appState.adxChart) {
                 appState.adxChart.timeScale().setVisibleRange(range);
             }
-        } catch(e) { console.error("Sync Error (Main->ADX):", e); }
+        } catch(e) { /* Console error silenced for sync jitter */ }
     });
     appState.adxChart.timeScale().subscribeVisibleTimeRangeChange(range => {
         try {
-            if (range && range.from && range.to && appState.chartInstance) {
+            if (range && range.from !== null && range.to !== null && appState.chartInstance) {
                 appState.chartInstance.timeScale().setVisibleRange(range);
             }
-        } catch(e) { console.error("Sync Error (ADX->Main):", e); }
+        } catch(e) { /* Console error silenced for sync jitter */ }
     });
 
     new ResizeObserver(() => {
@@ -301,7 +454,7 @@ function renderChart(data) {
                     position: l.signal === 1 ? 'belowBar' : 'aboveBar',
                     color: l.signal === 1 ? '#22c55e' : '#ef4444',
                     shape: l.signal === 1 ? 'arrowUp' : 'arrowDown',
-                    text: 'LZ'
+                    text: l.signal === 1 ? 'L-BUY' : 'L-SELL'
                 });
             }
         });
@@ -327,15 +480,18 @@ function renderChart(data) {
             
             if (tr === 1) {
                 upPoints.push({ time, value: val });
-                // Add a null to the other series to break the line
-                if (i > 0 && trend[i-1] === -1) downPoints.push({ time, value: val }); // Transition point
-            } else {
+                if (i > 0 && trend[i - 1] === -1) {
+                    downPoints.push({ time, value: val }); // Transition anchor
+                }
+            } else if (tr === -1) {
                 downPoints.push({ time, value: val });
-                if (i > 0 && trend[i-1] === 1) upPoints.push({ time, value: val }); // Transition point
+                if (i > 0 && trend[i - 1] === 1) {
+                    upPoints.push({ time, value: val }); // Transition anchor
+                }
             }
 
-            // Regime Markers (1, 2, 3) - Show at flips or every 20 bars
-            if (showST && (i === 0 || trend[i] !== trend[i-1] || i % 25 === 0)) {
+            // Regime Markers (1, 2, 3) - Show at flips or every 25 bars
+            if (showST && (i === 0 || trend[i] !== trend[i - 1] || i % 25 === 0)) {
                 if (validTimes.has(time)) {
                     combinedMarkers.push({
                         time,
@@ -349,11 +505,11 @@ function renderChart(data) {
         }
         
         if (appState.series.stUp) {
-            appState.series.stUp.setData(upPoints);
+            appState.series.stUp.setData(upPoints.sort((a, b) => a.time - b.time));
             appState.series.stUp.applyOptions({ visible: showST });
         }
         if (appState.series.stDown) {
-            appState.series.stDown.setData(downPoints);
+            appState.series.stDown.setData(downPoints.sort((a, b) => a.time - b.time));
             appState.series.stDown.applyOptions({ visible: showST });
         }
 
@@ -361,27 +517,62 @@ function renderChart(data) {
         if (stVals.length > 0) {
             const lastST = stVals[stVals.length - 1];
             const stEl = document.getElementById('legend-st');
-            if (stEl) stEl.textContent = `ST (${parseFloat(lastST).toFixed(1)})`;
+            if (stEl) stEl.textContent = `ST: ${parseFloat(lastST).toFixed(1)}`;
         }
     }
 
-    // 3. KNN Trend (TV Parity: Historical Shading/Line)
-    if (showKNN && data.ml_knn) {
-        const knnPoints = data.ml_knn.map(p => ({
+    // 3. KNN Trend (TV Parity: Color-changing line based on trend)
+    if (data.ml_knn) {
+        const knnData = data.ml_knn.map(p => ({
             time: Number(p.time) + 19800,
-            value: parseFloat(p.value)
+            value: parseFloat(p.value),
+            trend: parseInt(p.trend),
+            marker: parseInt(p.marker)
         })).sort((a, b) => a.time - b.time);
-        
-        if (appState.series.knnLine) {
-            appState.series.knnLine.setData(knnPoints);
-            appState.series.knnLine.applyOptions({ visible: true });
+
+        const upPoints = [];
+        const downPoints = [];
+
+        for (let i = 0; i < knnData.length; i++) {
+            const pt = knnData[i];
+            
+            // Collect Markers
+            if (showKNN && pt.marker !== 0 && !isNaN(pt.marker)) {
+                if (validTimes.has(pt.time)) {
+                    combinedMarkers.push({
+                        time: pt.time,
+                        position: pt.marker === 1 ? 'belowBar' : 'aboveBar',
+                        color: pt.marker === 1 ? '#a855f7' : '#f97316',
+                        shape: pt.marker === 1 ? 'arrowUp' : 'arrowDown',
+                        text: pt.marker === 1 ? 'K-BUY' : 'K-SELL'
+                    });
+                }
+            }
+
+            if (pt.trend === 1) {
+                upPoints.push({ time: pt.time, value: pt.value });
+                if (i > 0 && knnData[i - 1].trend === -1) {
+                    downPoints.push({ time: pt.time, value: pt.value }); // Transition anchor
+                }
+            } else if (pt.trend === -1) {
+                downPoints.push({ time: pt.time, value: pt.value });
+                if (i > 0 && knnData[i - 1].trend === 1) {
+                    upPoints.push({ time: pt.time, value: pt.value }); // Transition anchor
+                }
+            }
         }
-    } else if (appState.series.knnLine) {
-        appState.series.knnLine.applyOptions({ visible: false });
+
+        if (appState.series.knnUp) {
+            appState.series.knnUp.setData(upPoints.sort((a, b) => a.time - b.time));
+            appState.series.knnUp.applyOptions({ visible: showKNN });
+        }
+        if (appState.series.knnDown) {
+            appState.series.knnDown.setData(downPoints.sort((a, b) => a.time - b.time));
+            appState.series.knnDown.applyOptions({ visible: showKNN });
+        }
     }
 
     // 4. 3PM Price Projection
-    // Requirement 5: 3PM projection line with math + statistical calculation.
     if (data.projection && data.proj_timestamps) {
         const proj = data.proj_timestamps.map((t, i) => ({
             time: Number(t) + 19800,
@@ -390,29 +581,28 @@ function renderChart(data) {
         
         if (!appState.series.projLine) {
             appState.series.projLine = appState.chartInstance.addLineSeries({ 
-                color: '#6366f1', lineWidth: 2, lineStyle: 2, title: '3PM Proj' 
+                color: '#6366f1', lineWidth: 2, lineStyle: 2, title: '3PM Proj',
+                autoscaleInfoProvider: () => null
             });
         }
         appState.series.projLine.setData(proj);
-        // SKEPTIC: The user says checking KNN (projection) zooms the chart.
-        // We ensure visibility is ON but we don't fitContent if it's already rendered.
         appState.series.projLine.applyOptions({ visible: true });
 
         if (data.upper_band) {
             const upper = data.proj_timestamps.map((t, i) => ({ time: Number(t) + 19800, value: parseFloat(data.upper_band[i]) })).sort((a, b) => a.time - b.time);
-            if (!appState.series.upperBand) appState.series.upperBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3 });
+            if (!appState.series.upperBand) appState.series.upperBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3, autoscaleInfoProvider: () => null });
             appState.series.upperBand.setData(upper);
             appState.series.upperBand.applyOptions({ visible: true });
         }
         if (data.lower_band) {
             const lower = data.proj_timestamps.map((t, i) => ({ time: Number(t) + 19800, value: parseFloat(data.lower_band[i]) })).sort((a, b) => a.time - b.time);
-            if (!appState.series.lowerBand) appState.series.lowerBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3 });
+            if (!appState.series.lowerBand) appState.series.lowerBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3, autoscaleInfoProvider: () => null });
             appState.series.lowerBand.setData(lower);
             appState.series.lowerBand.applyOptions({ visible: true });
         }
     }
 
-    // Requirement 6: Ensure markers are sorted by time.
+    // Ensure markers are sorted by time.
     combinedMarkers.sort((a, b) => a.time - b.time);
 
     // Filter duplicates at the same time point
@@ -423,7 +613,7 @@ function renderChart(data) {
             uniqueMarkers.push(m);
             lastMT = m.time;
         } else if (m.time === lastMT) {
-            uniqueMarkers[uniqueMarkers.length - 1].text += `+${m.text}`;
+            uniqueMarkers[uniqueMarkers.length - 1].text += ` | ${m.text}`;
         }
     }
 
@@ -434,13 +624,14 @@ function renderChart(data) {
         document.getElementById('legend-vwap').textContent = `VWAP: ₹${parseFloat(data.vwap).toFixed(2)}`;
     }
 
-    // Move to last bar if it's the first render or interval change
-    // SKEPTIC: scrollToPosition(0) can cause the "zoom" effect if not careful.
-    // We only scroll if the user isn't already viewing the end.
-    const timeScale = appState.chartInstance.timeScale();
-    if (ohlc.length > 0 && !appState.userIsScrolling) {
-        // timeScale.scrollToPosition(0, false); 
+    // Only fitContent on the very first load of a ticker
+    if (appState.isFirstLoad && ohlc.length > 0) {
+        appState.chartInstance.timeScale().fitContent();
+        appState.isFirstLoad = false;
     }
+    
+    // Clear interval change flag
+    appState.isIntervalChange = false;
 }
 
 // ─── UI Rendering Functions ──────────────────────────────────────────
@@ -838,7 +1029,7 @@ function handleAIAdvisorUpdate(data) {
                             <span class="sc-signal ${signalClass(signal)}">${signal}</span>
                         </div>
                         <div class="sc-price-block">
-                            <span class="sc-live-price">₹${fmt(r.live_price)}</span>
+                            <span class="sc-price sc-live-price">₹${fmt(r.live_price)}</span>
                             <div class="sc-confidence" title="AI Consistency Score">
                                 <div class="conf-bar" style="width:${conf}%; background: ${conf > 75 ? '#22c55e' : conf > 50 ? '#fbbf24' : '#ef4444'}"></div>
                                 <span>${conf}%</span>
@@ -850,9 +1041,10 @@ function handleAIAdvisorUpdate(data) {
 
                     <div class="sc-ta-row">
                         <div class="ta-chip" title="RSI Indicator"><span class="ta-label">RSI</span><span class="ta-value" style="color:${rsiColor(ta.rsi_14)}">${ta.rsi_14 || '--'}</span></div>
+                        <div class="ta-chip" title="MACD Convergence"><span class="ta-label">MACD</span><span class="ta-value">${ta.macd_hist || '--'}</span></div>
                         <div class="ta-chip" title="ADX Trend Strength"><span class="ta-label">ADX</span><span class="ta-value">${ta.adx_14 || '--'}</span></div>
                         <div class="ta-chip" title="Volume Relative to 20-day Avg"><span class="ta-label">VOL</span><span class="ta-value">${ta.vol_surge || 1}x</span></div>
-                        <div class="ta-chip" title="Math Probability / LZ Score"><span class="ta-label">MATH</span><span class="ta-value">${r.lorentzian?.score || '--'}</span></div>
+                        <div class="ta-chip" title="Lorentzian AI Score"><span class="ta-label">LZ AI</span><span class="ta-value">${ta.lz_score || '--'}</span></div>
                     </div>
 
                     <div class="sc-levels-row">
@@ -985,6 +1177,15 @@ function handleStateUpdate(msg) {
         if (fa) fa.checked = msg.fallback_ai;
     }
 
+    if (msg.connection_status) {
+        const upxPill = document.getElementById('upx-status');
+        if (upxPill) {
+            const conn = msg.connection_status?.upstox?.connected;
+            upxPill.className = `health-pill ${conn ? 'active' : 'disconnected'}`;
+            upxPill.title = `Upstox: ${conn ? 'Connected' : 'Disconnected'}`;
+        }
+    }
+
     // 6. Refresh UI
     renderPositions();
     renderTimeline();
@@ -1034,6 +1235,11 @@ function handleLiveTick(tick) {
  * Central WebSocket message dispatcher.
  * Requirement 2: handleServerMessage/onmessage with no duplications.
  */
+ws.onopen = () => {
+    console.log("WebSocket connected");
+    ws.send(JSON.stringify({ action: "get_status" }));
+};
+
 ws.onmessage = (event) => {
     try {
         const msg = JSON.parse(event.data);
@@ -1089,7 +1295,25 @@ ws.onmessage = (event) => {
                     upxPill.title = `Upstox: ${conn ? 'Connected' : 'Disconnected'}`;
                 }
                 break;
-            default:
+            case "sentinel_alert":
+                showToast(`🚨 ${msg.data.ticker}: ${msg.data.title}`, 'warning');
+                break;
+            case "news_update":
+                // Requirement: Monitor news for shocks.
+                if (msg.data && msg.data.headlines) {
+                    const timeline = document.getElementById('timeline-container');
+                    if (timeline) {
+                        const h = msg.data.headlines[0];
+                        if (h) {
+                            const event = document.createElement('div');
+                            event.className = 'timeline-event info';
+                            event.innerHTML = `<span class="time">${new Date().toLocaleTimeString()}</span> <span class="msg"><b>${h.ticker}</b>: ${h.title}</span>`;
+                            timeline.prepend(event);
+                        }
+                    }
+                }
+                break;
+            case "notification":
                 console.warn("Unknown message type:", msg.type);
         }
     } catch (e) {
@@ -1179,6 +1403,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 3. Chart Controls (Timeframe & Indicators)
     document.getElementById('chart-close-btn')?.addEventListener('click', closeChart);
+
+    // Upstox Connect Button
+    document.getElementById('upstox-connect-btn')?.addEventListener('click', () => {
+        window.open('/upstox/connect', '_blank');
+    });
     
     document.querySelectorAll('.tf-btn').forEach(btn => {
         btn.addEventListener('click', () => {

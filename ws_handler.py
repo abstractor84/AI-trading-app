@@ -39,39 +39,50 @@ class ConnectionManager:
         for conn in self.active_connections:
             try:
                 await conn.send_json(message)
-            except Exception:
+            except Exception as e:
                 dead.append(conn)
         for d in dead:
             self.disconnect(d)
 
     async def send_state(self, websocket: WebSocket, state):
         """Send full initial state to a newly connected client."""
-        phase_ctx = market_phase_svc.get_phase_context()
-        from services.quota_service import quota_svc
-        
-        payload = {
-            "type": "state_update",
-            "capital": state.capital,
-            "max_loss": state.max_loss_per_trade,
-            "open_trades": state.open_trades,
-            "closed_trades": state.closed_trades,
-            "global_context": getattr(state, 'global_context', {}),
-            "market_phase": phase_ctx,
-            "ai_calls_today": quota_svc.get_total_daily_usage(),
-            "ai_calls_limit": 20,
-            "ai_advisor": getattr(state, 'ai_advisor_message', None),
-            "ai_scans_today": getattr(state, 'ai_scans_today', []),
-            "connection_status": getattr(state, 'connection_status', {}),
-            "action_timeline": getattr(state, 'action_timeline', [])[-20:],
-            "search_engine": getattr(state, 'search_engine', 'tavily'),
-            "data_provider": getattr(state, 'data_provider', 'upstox'),
-            "fallback_data": getattr(state, 'fallback_data', True),
-            "fallback_search": getattr(state, 'fallback_search', True),
-            "fallback_ai": getattr(state, 'fallback_ai', True),
-            "ai_provider": getattr(state, 'ai_provider', 'google'),
-            "ai_model": getattr(state, 'ai_model', 'gemini-3.1-pro'),
-        }
-        await websocket.send_json(payload)
+        try:
+            from services.market_phase import market_phase_svc
+            phase_ctx = market_phase_svc.get_phase_context()
+            
+            from services.quota_service import quota_svc
+            
+            ai_prov = getattr(state, 'ai_provider', 'google')
+            try:
+                quota_status = quota_svc.check_quota(ai_prov)
+            except Exception as e:
+                quota_status = {"limit_rpd": 20, "remaining_rpd": 20}
+
+            payload = {
+                "type": "state_update",
+                "capital": state.capital,
+                "max_loss": state.max_loss_per_trade,
+                "open_trades": state.open_trades,
+                "closed_trades": state.closed_trades,
+                "global_context": getattr(state, 'global_context', {}),
+                "market_phase": phase_ctx,
+                "ai_calls_today": quota_status.get("limit_rpd", 30) - quota_status.get("remaining_rpd", 30),
+                "ai_calls_limit": quota_status.get("limit_rpd", 30),
+                "ai_advisor": getattr(state, 'ai_advisor_message', None),
+                "ai_scans_today": getattr(state, 'ai_scans_today', []),
+                "connection_status": getattr(state, 'connection_status', {}),
+                "action_timeline": getattr(state, 'action_timeline', [])[-20:],
+                "search_engine": getattr(state, 'search_engine', 'tavily'),
+                "data_provider": getattr(state, 'data_provider', 'upstox'),
+                "fallback_data": getattr(state, 'fallback_data', True),
+                "fallback_search": getattr(state, 'fallback_search', True),
+                "fallback_ai": getattr(state, 'fallback_ai', True),
+                "ai_provider": getattr(state, 'ai_provider', 'google'),
+                "ai_model": getattr(state, 'ai_model', 'gemini-3.1-pro'),
+            }
+            await websocket.send_json(payload)
+        except Exception as e:
+            logger.error(f"SKEPTIC: send_state failed: {e}")
 
 
 async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, state):
@@ -79,14 +90,22 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
     Main WebSocket command handler.
     Routes incoming commands to the appropriate service.
     """
-    await manager.connect(websocket)
-    await manager.send_state(websocket, state)
-
+    logger.info("New WebSocket connection attempt")
     try:
+        await manager.connect(websocket)
+        logger.info("WebSocket connected and accepted")
+        await manager.send_state(websocket, state)
+        logger.info("Initial state sent successfully")
+
         while True:
-            data = await websocket.receive_text()
-            command = json.loads(data)
-            action = command.get("action")
+            try:
+                data = await websocket.receive_text()
+                logger.debug(f"Received WebSocket command: {data[:100]}")
+                command = json.loads(data)
+                action = command.get("action")
+            except Exception as e:
+                logger.warning(f"Error receiving/parsing WebSocket data: {e}")
+                break
 
             if action == "update_settings":
                 state.update_settings(
@@ -273,8 +292,9 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
             elif action == "trigger_scan":
                 # V3 Skeptic Audit: Implement 60s cooldown to prevent quota exhaustion
                 import time
+                import os
                 last_scan = getattr(state, '_last_manual_scan_time', 0)
-                if time.time() - last_scan < 60:
+                if time.time() - last_scan < 60 and os.getenv("SIMULATION", "false").lower() != "true":
                     await websocket.send_json({
                         "type": "notification",
                         "message": f"Scan cooldown active. Wait {int(60 - (time.time() - last_scan))}s.",
@@ -292,6 +312,7 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
 
                 import os
                 if os.getenv("SIMULATION", "false").lower() == "true":
+                    await asyncio.sleep(1) # Delay for UI stabilization
                     mock_picks = [{
                         "ticker": "RELIANCE.NS",
                         "action": "BUY",
@@ -300,18 +321,17 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                         "confidence": 85,
                         "reasoning": "Simulation mode: Mocked trade candidate for RELIANCE.",
                         "live_price": 2500.0,
-                        "ta_data": {
-                            "rsi_14": 45.0, 
-                            "macd_hist": 2.5, 
-                            "adx_14": 30.0, 
-                            "vwap": 2490.0, 
-                            "vol_surge": 1.5, 
-                            "ema_9": 2510.0, 
+                        "technicals": {
+                            "rsi_14": 45.0,
+                            "macd_hist": 2.5,
+                            "adx_14": 30.0,
+                            "vwap": 2490.0,
+                            "vol_surge": 1.5,
+                            "ema_9": 2510.0,
                             "ema_21": 2480.0,
                             "lz_score": 0.8
                         },
-                        "risk_levels": {"stop_loss": 2480.0, "target_1": 2540.0, "target_2": 2560.0, "quantity": 10},
-                        "fundamentals": {"sector": "Energy", "market_cap": "17T"},
+                        "risk_levels": {"stop_loss": 2480.0, "target_1": 2540.0, "target_2": 2560.0, "quantity": 10},                        "fundamentals": {"sector": "Energy", "market_cap": "17T"},
                         "sentiment": {"score": 60, "label": "Bullish", "headline_count": 5},
                         "atr": 10.0
                     }]
@@ -374,6 +394,16 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                         logger.info("No stocks passed the mathematical setup pre-filter. Skipping AI scan to save API limits.")
                         ai_picks = []
                     else:
+                        from services.quota_service import quota_svc
+                        quota_check = quota_svc.check_quota(provider) # Use provider as quota key
+                        if not quota_check.get("can_call", True):
+                            await manager.broadcast({
+                                "type": "notification",
+                                "message": f"🚫 Quota exhausted for {provider}. Switch provider/model in Settings.",
+                                "level": "error"
+                            })
+                            return
+
                         # Step 2: AI scan
                         logger.info(f"Passing {len(candidates)} mathematically validated Candidates to AI Scorer...")
                         ai_picks = await asyncio.to_thread(
@@ -639,9 +669,10 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     ta_svc = TechnicalAnalysisService()
                     ticker = command.get('ticker', 'RELIANCE.NS')
                     interval = command.get('interval', '5m')
+                    params = command.get('params', {}) # Capture ML settings
 
                     payload = await asyncio.to_thread(
-                        ta_svc.get_chart_payload, ticker, interval
+                        ta_svc.get_chart_payload, ticker, interval, params
                     )
 
                     await websocket.send_json({
