@@ -24,8 +24,24 @@ window.changeChartInterval = changeChartInterval;
 window.toggleIndicator = toggleIndicator;
 window.toggleIndicatorSettings = toggleIndicatorSettings;
 window.saveIndicatorSettings = saveIndicatorSettings;
+window.resetIndicatorSettings = resetIndicatorSettings;
 
 let chartRefreshTimer = null;
+
+const DEFAULT_INDICATOR_SETTINGS = {
+    st: { atr_period: 10, factor: 3.0, training_len: 100, p_low: 0.25, p_med: 0.5, p_high: 0.75 },
+    lz: { k: 8, lookback: 2000, threshold: 0.5, use_volatility: true },
+    knn: { k: 5, sequence_length: 15, window: 200 }
+};
+
+function resetIndicatorSettings(indicator) {
+    if (DEFAULT_INDICATOR_SETTINGS[indicator]) {
+        appState.indicatorSettings[indicator] = JSON.parse(JSON.stringify(DEFAULT_INDICATOR_SETTINGS[indicator]));
+        toggleIndicatorSettings(indicator); // Re-populate UI
+        saveIndicatorSettings(indicator); // Apply and refresh
+        showToast(`${indicator.toUpperCase()} settings reset to defaults`, 'info');
+    }
+}
 
 // ─── AI Models Config ────────────────────────────────────────────────
 const AI_MODELS = {
@@ -128,7 +144,7 @@ function openChart(ticker) {
     }
 
     // Clear previous legend values
-    ['legend-ltp', 'legend-ohlc', 'legend-adx', 'legend-rsi', 'legend-st', 'legend-lz', 'legend-vwap'].forEach(id => {
+    ['legend-ltp', 'legend-ohlc', 'legend-adx', 'legend-rsi', 'legend-st', 'legend-lz', 'legend-knn', 'legend-vwap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.textContent = id.split('-')[1].toUpperCase() + ': --';
     });
@@ -193,7 +209,8 @@ function closeChart() {
  */
 function changeChartInterval(interval) {
     appState.currentInterval = interval;
-    appState.isIntervalChange = true; // Prevent zoom on interval change
+    // SKEPTIC: Ensure isFirstLoad remains false during interval changes to prevent zooming
+    appState.isFirstLoad = false;
     
     // Update UI buttons
     document.querySelectorAll('.tf-btn').forEach(btn => {
@@ -327,25 +344,17 @@ function initChartInstance(container, adxContainer) {
         wickUpColor: '#22c55e', wickDownColor: '#ef4444'
     });
     
-    // Adaptive SuperTrend (TV Parity: No extra Y-axis labels)
-    appState.series.stUp = appState.chartInstance.addLineSeries({
-        color: '#22c55e', lineWidth: 2, title: '', 
-        priceLineVisible: false, lastValueVisible: false
-    });
-    appState.series.stDown = appState.chartInstance.addLineSeries({
-        color: '#ef4444', lineWidth: 2, title: '',
-        priceLineVisible: false, lastValueVisible: false
-    });
+    // Auxiliary Series (SKEPTIC: Explicitly hide Y-axis labels to prevent clutter)
+    const auxOptions = {
+        lineWidth: 2, title: '', 
+        priceLineVisible: false, lastValueVisible: false,
+        axisLabelVisible: false
+    };
 
-    // KNN Trend Lines (TV Parity: No extra Y-axis labels)
-    appState.series.knnUp = appState.chartInstance.addLineSeries({
-        color: '#a855f7', lineWidth: 2, title: '', 
-        priceLineVisible: false, lastValueVisible: false
-    });
-    appState.series.knnDown = appState.chartInstance.addLineSeries({
-        color: '#f97316', lineWidth: 2, title: '',
-        priceLineVisible: false, lastValueVisible: false
-    });
+    appState.series.stUp = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#22c55e' });
+    appState.series.stDown = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#ef4444' });
+    appState.series.knnUp = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#a855f7' });
+    appState.series.knnDown = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#f97316' });
 
     appState.adxChart = LightweightCharts.createChart(adxContainer, {
         ...chartOptions, height: 150,
@@ -506,11 +515,11 @@ function renderChart(data) {
         
         if (appState.series.stUp) {
             appState.series.stUp.setData(upPoints.sort((a, b) => a.time - b.time));
-            appState.series.stUp.applyOptions({ visible: showST });
+            appState.series.stUp.applyOptions({ visible: showST, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
         }
         if (appState.series.stDown) {
             appState.series.stDown.setData(downPoints.sort((a, b) => a.time - b.time));
-            appState.series.stDown.applyOptions({ visible: showST });
+            appState.series.stDown.applyOptions({ visible: showST, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
         }
 
         // Update Legend
@@ -564,11 +573,18 @@ function renderChart(data) {
 
         if (appState.series.knnUp) {
             appState.series.knnUp.setData(upPoints.sort((a, b) => a.time - b.time));
-            appState.series.knnUp.applyOptions({ visible: showKNN });
+            appState.series.knnUp.applyOptions({ visible: showKNN, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
         }
         if (appState.series.knnDown) {
             appState.series.knnDown.setData(downPoints.sort((a, b) => a.time - b.time));
-            appState.series.knnDown.applyOptions({ visible: showKNN });
+            appState.series.knnDown.applyOptions({ visible: showKNN, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
+        }
+
+        // Update Legend
+        if (knnData.length > 0) {
+            const last = knnData[knnData.length - 1];
+            const knnEl = document.getElementById('legend-knn');
+            if (knnEl) knnEl.textContent = `KNN: ${last.trend === 1 ? 'BUY' : 'SELL'}`;
         }
     }
 
@@ -581,24 +597,25 @@ function renderChart(data) {
         
         if (!appState.series.projLine) {
             appState.series.projLine = appState.chartInstance.addLineSeries({ 
-                color: '#6366f1', lineWidth: 2, lineStyle: 2, title: '3PM Proj',
-                autoscaleInfoProvider: () => null
+                color: '#6366f1', lineWidth: 2, lineStyle: 2, title: '',
+                autoscaleInfoProvider: () => null,
+                lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false
             });
         }
         appState.series.projLine.setData(proj);
-        appState.series.projLine.applyOptions({ visible: true });
+        appState.series.projLine.applyOptions({ visible: true, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
 
         if (data.upper_band) {
             const upper = data.proj_timestamps.map((t, i) => ({ time: Number(t) + 19800, value: parseFloat(data.upper_band[i]) })).sort((a, b) => a.time - b.time);
-            if (!appState.series.upperBand) appState.series.upperBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3, autoscaleInfoProvider: () => null });
+            if (!appState.series.upperBand) appState.series.upperBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3, autoscaleInfoProvider: () => null, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
             appState.series.upperBand.setData(upper);
-            appState.series.upperBand.applyOptions({ visible: true });
+            appState.series.upperBand.applyOptions({ visible: true, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
         }
         if (data.lower_band) {
             const lower = data.proj_timestamps.map((t, i) => ({ time: Number(t) + 19800, value: parseFloat(data.lower_band[i]) })).sort((a, b) => a.time - b.time);
-            if (!appState.series.lowerBand) appState.series.lowerBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3, autoscaleInfoProvider: () => null });
+            if (!appState.series.lowerBand) appState.series.lowerBand = appState.chartInstance.addLineSeries({ color: 'rgba(99,102,241,0.1)', lineWidth: 1, lineStyle: 3, autoscaleInfoProvider: () => null, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
             appState.series.lowerBand.setData(lower);
-            appState.series.lowerBand.applyOptions({ visible: true });
+            appState.series.lowerBand.applyOptions({ visible: true, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
         }
     }
 
@@ -610,10 +627,13 @@ function renderChart(data) {
     let lastMT = -1;
     for (const m of combinedMarkers) {
         if (m.time > lastMT) {
-            uniqueMarkers.push(m);
+            uniqueMarkers.push({ ...m, text: String(m.text || '') });
             lastMT = m.time;
-        } else if (m.time === lastMT) {
-            uniqueMarkers[uniqueMarkers.length - 1].text += ` | ${m.text}`;
+        } else if (m.time === lastMT && uniqueMarkers.length > 0) {
+            const last = uniqueMarkers[uniqueMarkers.length - 1];
+            if (m.text) {
+                last.text = last.text ? `${last.text} | ${m.text}` : String(m.text);
+            }
         }
     }
 
@@ -624,14 +644,11 @@ function renderChart(data) {
         document.getElementById('legend-vwap').textContent = `VWAP: ₹${parseFloat(data.vwap).toFixed(2)}`;
     }
 
-    // Only fitContent on the very first load of a ticker
+    // SKEPTIC: Strict Zoom handling. Only fitContent on first ticker load.
     if (appState.isFirstLoad && ohlc.length > 0) {
         appState.chartInstance.timeScale().fitContent();
         appState.isFirstLoad = false;
     }
-    
-    // Clear interval change flag
-    appState.isIntervalChange = false;
 }
 
 // ─── UI Rendering Functions ──────────────────────────────────────────
