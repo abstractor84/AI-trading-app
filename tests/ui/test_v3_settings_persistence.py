@@ -9,10 +9,31 @@ def server():
     os.environ["SIMULATION"] = "true"
     import subprocess
     import time
+    # Kill any existing process on 8000
+    subprocess.run(["fuser", "-k", "8000/tcp"], capture_output=True)
+    time.sleep(1)
+    
     proc = subprocess.Popen(["./venv/bin/python3", "main.py"], env=os.environ)
-    time.sleep(5) # Wait for startup
+    
+    # Wait for startup with retry
+    retries = 10
+    started = False
+    import socket
+    while retries > 0:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('localhost', 8000)) == 0:
+                started = True
+                break
+        time.sleep(2)
+        retries -= 1
+    
+    if not started:
+        proc.terminate()
+        pytest.fail("Server failed to start on port 8000")
+        
     yield
     proc.terminate()
+    proc.wait()
 
 def test_ml_indicator_settings_update(page: Page, server):
     """
@@ -20,9 +41,10 @@ def test_ml_indicator_settings_update(page: Page, server):
     """
     page.goto("http://localhost:8000")
     
-    # 1. Open Chart for RELIANCE
-    page.click("text=RELIANCE")
-    expect(page.locator("#chart-title")).to_contain_text("RELIANCE")
+    # 1. Open Chart for RELIANCE via Search
+    page.fill("#global-chart-input", "RELIANCE")
+    page.click("#global-chart-btn")
+    expect(page.locator("#chart-title")).to_contain_text("RELIANCE", timeout=15000)
     
     # 2. Change ST Settings
     page.click("#gear-st")
@@ -40,7 +62,8 @@ def test_ml_indicator_settings_update(page: Page, server):
     # 4. Verify KNN Markers Logic (Check if markers are still in payload after toggle)
     page.uncheck("#toggle-knn")
     page.check("#toggle-knn")
-    # Evaluate marker count in appState
+    # Evaluate marker count in appState (Wait for data)
+    page.wait_for_function("() => window.appState && window.appState.currentChartData && window.appState.currentChartData.ml_knn", timeout=15000)
     marker_count = page.evaluate("appState.currentChartData.ml_knn.filter(p => p.marker !== 0).length")
     assert marker_count > 0, "KNN should have markers in simulation mode"
 
@@ -49,7 +72,10 @@ def test_chart_zoom_persistence(page: Page, server):
     Verify that switching intervals does not trigger a global zoom-out (fitContent).
     """
     page.goto("http://localhost:8000")
-    page.click("text=RELIANCE")
+    # Open RELIANCE via search
+    page.fill("#global-chart-input", "RELIANCE")
+    page.click("#global-chart-btn")
+    expect(page.locator("#chart-title")).to_contain_text("RELIANCE", timeout=15000)
     
     # Switch to 1m
     page.click("button[data-interval='1m']")

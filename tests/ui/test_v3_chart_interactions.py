@@ -39,9 +39,21 @@ def test_knn_label_and_legend_visibility(page: Page, server):
     page.wait_for_function("document.getElementById('legend-knn').textContent !== 'KNN: --'", timeout=20000)
     expect(page.locator("#legend-knn")).to_contain_text("KNN:", timeout=5000)
     
-    # 2. Check if KNN data is in state
-    has_knn_data = page.evaluate("() => appState.currentChartData && appState.currentChartData.ml_knn && appState.currentChartData.ml_knn.length > 0")
-    assert has_knn_data, "KNN data should be in payload"
+    # 3. Verify Marker Distribution (SKEPTIC: Ensure signals are not just at the start)
+    # The chart has 1000 bars in simulation. window=1000.
+    # We check if there are markers in the last 200 bars.
+    recent_marker_count = page.evaluate("""() => {
+        const data = appState.currentChartData.ml_knn;
+        const total = data.length;
+        const recent = data.slice(total - 200);
+        return recent.filter(p => p.marker !== 0).length;
+    }""")
+    assert recent_marker_count > 0, f"Should have at least one KNN marker in recent 200 bars, found {recent_marker_count}"
+    
+    # 4. Toggle KNN and verify it still renders
+    page.uncheck("#toggle-knn")
+    page.check("#toggle-knn")
+    expect(page.locator("#legend-knn")).to_be_visible()
 
 def test_crosshair_sync_and_tooltip(page: Page, server):
     """Verify crosshair sync and time tooltip visibility on both charts."""

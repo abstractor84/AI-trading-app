@@ -226,8 +226,20 @@ def test_45_knn_config_gear_opens_modal(page: Page):
 def test_49_complex_indicator_toggling_stress_test(page: Page):
     page.goto(f"http://127.0.0.1:{TEST_PORT}")
     page.evaluate("openChart('RELIANCE')")
+    
+    # Open and Close LZ settings
     page.click("#gear-lz")
+    page.click("#lz-settings .btn-primary")
+    
+    # Open and Close ST settings
     page.click("#gear-st")
+    page.click("#st-settings .btn-primary")
+    
+    # Open and Close KNN settings
     page.click("#gear-knn")
+    page.click("#knn-settings .btn-primary")
+    
     # Ensuring no multiple overlays lock the screen
-    pass
+    expect(page.locator("#lz-settings")).not_to_be_visible()
+    expect(page.locator("#st-settings")).not_to_be_visible()
+    expect(page.locator("#knn-settings")).not_to_be_visible()

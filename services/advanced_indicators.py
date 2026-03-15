@@ -345,11 +345,39 @@ class AdaptiveSuperTrend:
 class KNNTrendForecaster:
     """
     Machine Learning: kNN-Based Strategy (Capissimo Style)
-    Uses KNeighborsClassifier for trend classification.
+    Uses KNeighborsClassifier for trend classification with multi-feature input.
     """
     def __init__(self, k=5, sequence_length=15):
         self.k = k
         self.seq_len = sequence_length
+        self.scaler = StandardScaler()
+
+    def _prepare_knn_features(self, df: pd.DataFrame):
+        """Prepare multi-feature set for KNN trend classification."""
+        try:
+            features = pd.DataFrame(index=df.index)
+            features['rsi'] = ta.rsi(df['Close'], length=14).fillna(50)
+            
+            # WaveTrend (WT)
+            ap = (df['High'] + df['Low'] + df['Close']) / 3
+            esa = ta.ema(ap, length=10)
+            d = ta.ema(np.abs(ap - esa), length=10)
+            ci = (ap - esa) / (0.015 * d)
+            features['wt'] = ta.ema(ci, length=21).fillna(0)
+            
+            adx_df = ta.adx(df['High'], df['Low'], df['Close'], length=14)
+            features['adx'] = adx_df['ADX_14'].fillna(20) if adx_df is not None else 20
+            
+            features['cci'] = ta.cci(df['High'], df['Low'], df['Close'], length=20).fillna(0)
+            
+            atr = ta.atr(df['High'], df['Low'], df['Close'], length=14).fillna(0)
+            features['vol'] = (atr / df['Close']) * 100
+            
+            features.dropna(inplace=True)
+            return features
+        except Exception as e:
+            logger.error(f"KNN Feature Prep Error: {e}")
+            return None
 
     def forecast(self, df: pd.DataFrame, params=None):
         """Future price prediction using Scikit-Learn KNN Regressor"""
@@ -373,64 +401,74 @@ class KNNTrendForecaster:
         
         return [closes[-1] + d for d in pred_deltas]
 
-    def get_historical_shading(self, df: pd.DataFrame, window=200, **kwargs):
+    def get_historical_shading(self, df: pd.DataFrame, window=500, **kwargs):
         """
         TradingView Parity: Continuous line with Scikit-Learn classification.
-        SKEPTIC: Refined to handle smaller dataframes (e.g., 5-day charts) by ensuring
-        a minimum training set is always available.
+        SKEPTIC: Enhanced with multi-feature scaling and 4-bar lookahead target.
         """
         params = kwargs.get('params', {})
         k = int(params.get('k', self.k))
-        sl = int(params.get('sequence_length', self.seq_len))
         
-        if len(df) < k + 10: return [] # Minimum absolute safety
+        feat_df = self._prepare_knn_features(df)
+        if feat_df is None or len(feat_df) < k + 10:
+            return []
+            
+        indices = feat_df.index
+        closes = df.loc[indices, 'Close'].values
         
-        rsi = ta.rsi(df['Close'], length=14).fillna(50).values
-        closes = df['Close'].values
+        # Scaling
+        scaled_vals = self.scaler.fit_transform(feat_df.values)
         
-        total_len = len(df)
-        query_len = min(total_len - k - 1, window)
+        total_len = len(feat_df)
+        query_len = min(total_len - k - 5, window) # 5 for lookahead buffer
         start_idx = total_len - query_len
         
-        # SKEPTIC: Ensure we have at least 'k' bars for training
-        # We use data before start_idx for training if possible, else use a portion of the whole set
+        # Training Pool: Up to 2000 bars before the query window
         train_end = start_idx
-        train_start = max(0, train_end - 1000)
+        train_start = max(0, train_end - 2000)
         
-        # Fallback: if train_end is too small, use first 50% for training, rest for query
         if train_end < k:
+            # Fallback for small datasets
             train_start = 0
-            train_end = int(total_len * 0.5)
+            train_end = int(total_len * 0.6)
             start_idx = train_end
+            query_len = total_len - start_idx
+            
+        X_train = scaled_vals[train_start:train_end]
         
-        X_train = rsi[train_start:train_end].reshape(-1, 1)
-        y_train = np.where(np.diff(closes[train_start : train_end + 1]) > 0, 1, -1)
+        # Target: Price direction 4 bars later (Lookahead)
+        y_train = []
+        for j in range(train_start, train_end):
+            if j + 4 < total_len:
+                y_train.append(1 if closes[j+4] > closes[j] else -1)
+            else:
+                y_train.append(0)
+        y_train = np.array(y_train)
         
         if len(X_train) < k:
-            # Final fallback: just return neutral
-            return [{"time": int(df.index[i].timestamp()), "value": float(closes[i]), "trend": 0, "marker": 0} for i in range(total_len - query_len, total_len)]
-        
+            return [{"time": int(indices[i].timestamp()), "value": float(closes[i]), "trend": 0, "marker": 0} for i in range(total_len - query_len, total_len)]
+            
         model = KNeighborsClassifier(n_neighbors=k, weights='distance')
-        model.fit(X_train, y_train[:len(X_train)])
+        model.fit(X_train, y_train)
         
         # Batch Predict for the query window
-        X_query = rsi[start_idx:].reshape(-1, 1)
+        X_query = scaled_vals[start_idx:]
         preds = model.predict(X_query)
         
         shading = []
         prev_signal = 0
-        for i, idx_in_window in enumerate(range(start_idx, len(df))):
+        for i, idx_in_feat in enumerate(range(start_idx, total_len)):
             pred = preds[i]
-            # Guiding line is 14-period SMA
-            b_slice = closes[max(0, idx_in_window-14):idx_in_window]
-            baseline = np.mean(b_slice) if len(b_slice) > 0 else closes[idx_in_window]
+            # Baseline: 14-period EMA for visual reference
+            b_slice = closes[max(0, idx_in_feat-14):idx_in_feat+1]
+            baseline = np.mean(b_slice)
             
             # Marker logic: only on trend change
             marker = int(pred) if (pred != prev_signal and prev_signal != 0) else 0
             prev_signal = pred
             
             shading.append({
-                "time": int(df.index[idx_in_window].timestamp()), 
+                "time": int(indices[idx_in_feat].timestamp()), 
                 "value": round(float(baseline), 2),
                 "trend": int(pred),
                 "marker": marker

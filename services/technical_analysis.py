@@ -436,9 +436,9 @@ class TechnicalAnalysisService:
         
         # 5. Compute ML Series
         from services.advanced_indicators import classifier, adaptive_st, knn_forecaster
-        lz_series = classifier.classify_series(df, window=500, params=lz_params)
-        st_series = adaptive_st.calculate(df, window=500, params=st_params)
-        knn_series = knn_forecaster.get_historical_shading(df, window=500, params=knn_params)
+        lz_series = classifier.classify_series(df, window=1000, params=lz_params)
+        st_series = adaptive_st.calculate(df, window=1000, params=st_params)
+        knn_series = knn_forecaster.get_historical_shading(df, window=1000, params=knn_params)
         
         # 6. Extract ADX & RSI
         adx_series = []
@@ -446,14 +446,14 @@ class TechnicalAnalysisService:
         import math
         adx_col = [c for c in df.columns if 'ADX_' in c]
         if adx_col:
-            adx_vals = df[adx_col[0]].tail(500)
+            adx_vals = df[adx_col[0]].tail(1000)
             for t, v in adx_vals.items():
                 if not math.isnan(v):
                     adx_series.append({"time": int(t.timestamp()), "value": float(v)})
         
         rsi_col = [c for c in df.columns if 'RSI_' in c]
         if rsi_col:
-            rsi_vals = df[rsi_col[0]].tail(500)
+            rsi_vals = df[rsi_col[0]].tail(1000)
             for t, v in rsi_vals.items():
                 if not math.isnan(v):
                     rsi_series.append({"time": int(t.timestamp()), "value": float(v)})
@@ -468,7 +468,7 @@ class TechnicalAnalysisService:
             return default
 
         ohlc_list = []
-        for t, r in df.tail(500).iterrows():
+        for t, r in df.tail(1000).iterrows():
             ohlc_list.append({
                 "time": int(t.timestamp()),
                 "open": safe_get(r, ['Open', 'open']),
