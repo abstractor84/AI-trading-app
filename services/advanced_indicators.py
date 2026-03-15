@@ -376,30 +376,44 @@ class KNNTrendForecaster:
     def get_historical_shading(self, df: pd.DataFrame, window=200, **kwargs):
         """
         TradingView Parity: Continuous line with Scikit-Learn classification.
+        SKEPTIC: Refined to handle smaller dataframes (e.g., 5-day charts) by ensuring
+        a minimum training set is always available.
         """
         params = kwargs.get('params', {})
         k = int(params.get('k', self.k))
         sl = int(params.get('sequence_length', self.seq_len))
         
-        if len(df) < sl + 50: return []
+        if len(df) < k + 10: return [] # Minimum absolute safety
         
         rsi = ta.rsi(df['Close'], length=14).fillna(50).values
         closes = df['Close'].values
         
-        start_idx = len(df) - window
-        if start_idx < 0: start_idx = 0
+        total_len = len(df)
+        query_len = min(total_len - k - 1, window)
+        start_idx = total_len - query_len
         
-        # Train on the lookback buffer
-        train_start = max(0, start_idx - 1000)
-        X_train = rsi[train_start:start_idx].reshape(-1, 1)
-        y_train = np.where(np.diff(closes[train_start : start_idx + 1]) > 0, 1, -1)
+        # SKEPTIC: Ensure we have at least 'k' bars for training
+        # We use data before start_idx for training if possible, else use a portion of the whole set
+        train_end = start_idx
+        train_start = max(0, train_end - 1000)
         
-        if len(X_train) < k: return []
+        # Fallback: if train_end is too small, use first 50% for training, rest for query
+        if train_end < k:
+            train_start = 0
+            train_end = int(total_len * 0.5)
+            start_idx = train_end
+        
+        X_train = rsi[train_start:train_end].reshape(-1, 1)
+        y_train = np.where(np.diff(closes[train_start : train_end + 1]) > 0, 1, -1)
+        
+        if len(X_train) < k:
+            # Final fallback: just return neutral
+            return [{"time": int(df.index[i].timestamp()), "value": float(closes[i]), "trend": 0, "marker": 0} for i in range(total_len - query_len, total_len)]
         
         model = KNeighborsClassifier(n_neighbors=k, weights='distance')
         model.fit(X_train, y_train[:len(X_train)])
         
-        # Batch Predict
+        # Batch Predict for the query window
         X_query = rsi[start_idx:].reshape(-1, 1)
         preds = model.predict(X_query)
         
@@ -411,6 +425,7 @@ class KNNTrendForecaster:
             b_slice = closes[max(0, idx_in_window-14):idx_in_window]
             baseline = np.mean(b_slice) if len(b_slice) > 0 else closes[idx_in_window]
             
+            # Marker logic: only on trend change
             marker = int(pred) if (pred != prev_signal and prev_signal != 0) else 0
             prev_signal = pred
             

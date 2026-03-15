@@ -297,7 +297,7 @@ function saveIndicatorSettings(indicator) {
     }
 
     document.getElementById(`${indicator}-settings`).style.display = 'none';
-    showToast(`${indicator.toUpperCase()} settings updated`, 'success');
+    showToast(`${indicator.toUpperCase()} settings applied`, 'success');
 
     // Trigger refresh
     if (appState.currentChartKey && ws.readyState === WebSocket.OPEN) {
@@ -328,8 +328,12 @@ function initChartInstance(container, adxContainer) {
             vertLines: { color: 'rgba(139,148,158,0.06)' },
             horzLines: { color: 'rgba(139,148,158,0.06)' }
         },
-        crosshair: { mode: 0 },
-        rightPriceScale: { borderColor: 'rgba(139,148,158,0.2)' },
+        crosshair: { 
+            mode: 1, 
+            vertLine: { labelVisible: true, color: 'rgba(139,148,158,0.5)', style: 2 },
+            horzLine: { labelVisible: true, color: 'rgba(139,148,158,0.5)', style: 2 }
+        },
+        rightPriceScale: { borderColor: 'rgba(139,148,158,0.2)', autoScale: true },
         timeScale: {
             borderColor: 'rgba(139,148,158,0.2)',
             timeVisible: true,
@@ -358,33 +362,103 @@ function initChartInstance(container, adxContainer) {
 
     appState.adxChart = LightweightCharts.createChart(adxContainer, {
         ...chartOptions, height: 150,
-        timeScale: { ...chartOptions.timeScale, visible: false }
+        crosshair: { ...chartOptions.crosshair },
+        timeScale: { 
+            ...chartOptions.timeScale, 
+            visible: true, 
+            borderVisible: false
+        }
     });
+    
+    // SKEPTIC: Ensure timeScale is visible for tooltips with minimalist labels
+    appState.adxChart.applyOptions({
+        timeScale: {
+            visible: true,
+            ticksVisible: true,
+            borderVisible: false,
+            shiftVisibleRangeOnNewBar: true
+        }
+    });
+
     appState.series.adxLine = appState.adxChart.addLineSeries({ color: '#facc15', lineWidth: 2, title: 'ADX' });
     appState.series.rsiLine = appState.adxChart.addLineSeries({ color: '#60a5fa', lineWidth: 1, title: 'RSI' });
 
-    // Sync TimeScales
+    // Sync TimeScales (Scrolling)
     appState.chartInstance.timeScale().subscribeVisibleTimeRangeChange(range => {
-        try {
-            if (range && range.from !== null && range.to !== null && appState.adxChart) {
+        if (range && range.from && range.to && appState.adxChart) {
+            try {
                 appState.adxChart.timeScale().setVisibleRange(range);
-            }
-        } catch(e) { /* Console error silenced for sync jitter */ }
+            } catch(e) { /* Defensive catch for sync jitter */ }
+        }
     });
     appState.adxChart.timeScale().subscribeVisibleTimeRangeChange(range => {
-        try {
-            if (range && range.from !== null && range.to !== null && appState.chartInstance) {
+        if (range && range.from && range.to && appState.chartInstance) {
+            try {
                 appState.chartInstance.timeScale().setVisibleRange(range);
-            }
-        } catch(e) { /* Console error silenced for sync jitter */ }
+            } catch(e) { /* Defensive catch for sync jitter */ }
+        }
     });
 
-    new ResizeObserver(() => {
-        if (appState.chartInstance) {
-            appState.chartInstance.applyOptions({ width: container.clientWidth });
-            appState.adxChart.applyOptions({ width: container.clientWidth });
+    // Sync Crosshairs (Bidirectional)
+    appState.chartInstance.subscribeCrosshairMove(param => {
+        if (!appState.adxChart) return;
+        if (!param.time || !param.point) {
+            appState.adxChart.setCrosshairPosition(undefined, undefined, appState.series.adxLine);
+            return;
         }
-    }).observe(container);
+        appState.adxChart.setCrosshairPosition(undefined, param.time, appState.series.adxLine);
+    });
+    appState.adxChart.subscribeCrosshairMove(param => {
+        if (!appState.chartInstance) return;
+        if (!param.time || !param.point) {
+            appState.chartInstance.setCrosshairPosition(undefined, undefined, appState.series.candles);
+            return;
+        }
+        appState.chartInstance.setCrosshairPosition(undefined, param.time, appState.series.candles);
+    });
+
+    if (!window.chartResizeObserver) {
+        window.chartResizeObserver = new ResizeObserver(() => {
+            const container = document.getElementById('chart-container');
+            if (container && appState.chartInstance) {
+                appState.chartInstance.applyOptions({ width: container.clientWidth });
+            }
+            if (container && appState.adxChart) {
+                appState.adxChart.applyOptions({ width: container.clientWidth });
+            }
+        });
+        window.chartResizeObserver.observe(container);
+    }
+}
+
+function verifySignalAccuracy(ohlc, markers) {
+    if (!ohlc || ohlc.length < 20 || !markers || markers.length === 0) return null;
+    
+    let total = 0;
+    let successful = 0;
+    const horizon = 5; // 5 bars lookahead
+    
+    markers.forEach(m => {
+        if (!m.text || (!m.text.includes('BUY') && !m.text.includes('SELL'))) return;
+        
+        const idx = ohlc.findIndex(c => c.time === m.time);
+        if (idx === -1 || idx + horizon >= ohlc.length) return;
+        
+        const entryPrice = ohlc[idx].close;
+        const exitPrice = ohlc[idx + horizon].close;
+        
+        total++;
+        if (m.text.includes('BUY')) {
+            if (exitPrice > entryPrice) successful++;
+        } else if (m.text.includes('SELL')) {
+            if (exitPrice < entryPrice) successful++;
+        }
+    });
+    
+    if (total === 0) return null;
+    const accuracy = (successful / total) * 100;
+    console.log(`SKEPTIC: Signal Accuracy Audit -> ${accuracy.toFixed(1)}% (${successful}/${total} successful)`);
+    return accuracy;
 }
 
 function renderChart(data) {
@@ -532,6 +606,8 @@ function renderChart(data) {
 
     // 3. KNN Trend (TV Parity: Color-changing line based on trend)
     if (data.ml_knn) {
+        console.log(`SKEPTIC: KNN Data Arrival -> ${data.ml_knn.length} points`);
+        console.log(`SKEPTIC: KNN Latest Sample ->`, data.ml_knn.slice(-1)[0]);
         const knnData = data.ml_knn.map(p => ({
             time: Number(p.time) + 19800,
             value: parseFloat(p.value),
@@ -545,7 +621,7 @@ function renderChart(data) {
         for (let i = 0; i < knnData.length; i++) {
             const pt = knnData[i];
             
-            // Collect Markers
+            // Collect Markers (K-BUY / K-SELL)
             if (showKNN && pt.marker !== 0 && !isNaN(pt.marker)) {
                 if (validTimes.has(pt.time)) {
                     combinedMarkers.push({
@@ -584,8 +660,14 @@ function renderChart(data) {
         if (knnData.length > 0) {
             const last = knnData[knnData.length - 1];
             const knnEl = document.getElementById('legend-knn');
-            if (knnEl) knnEl.textContent = `KNN: ${last.trend === 1 ? 'BUY' : 'SELL'}`;
+            if (knnEl) {
+                const signal = last.trend === 1 ? 'BUY' : (last.trend === -1 ? 'SELL' : 'NEUTRAL');
+                knnEl.textContent = `KNN: ${signal}`;
+                console.log(`SKEPTIC: KNN Legend Updated -> ${knnEl.textContent}`);
+            }
         }
+    } else {
+        console.warn("SKEPTIC: No ml_knn data in payload");
     }
 
     // 4. 3PM Price Projection
@@ -638,6 +720,9 @@ function renderChart(data) {
     }
 
     appState.series.candles.setMarkers(uniqueMarkers);
+    
+    // SKEPTIC: Accuracy Audit
+    verifySignalAccuracy(ohlc, uniqueMarkers);
 
     // VWAP Legend
     if (data.vwap) {
