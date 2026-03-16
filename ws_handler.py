@@ -419,17 +419,6 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                             ai_fallback=getattr(state, 'fallback_ai', True)
                         )
 
-                        # Update state for persistent view
-                        import datetime
-                        scan_entry = {"type": "SCAN", "result": ai_picks, "timestamp": datetime.datetime.now().strftime("%H:%M:%S")}
-                        state.ai_advisor_message = scan_entry
-                        state.ai_scans_today.insert(0, scan_entry)
-                        state.ai_scans_today = state.ai_scans_today[:50]
-
-                        await manager.broadcast({
-                            "type": "scan_results",
-                            "data": ai_picks
-                        })
                     # Step 3: Enrich each AI pick with full data
                     enriched_picks = []
                     if isinstance(ai_picks, list):
@@ -560,6 +549,13 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                                 "sentiment": sentiment,
                                 "atr": _s(atr, 2),
                             })
+
+                    # Update state for persistent view WITH ENRICHED DATA
+                    import datetime
+                    scan_entry = {"type": "SCAN", "result": enriched_picks, "timestamp": datetime.datetime.now().strftime("%H:%M:%S")}
+                    state.ai_advisor_message = scan_entry
+                    state.ai_scans_today.insert(0, scan_entry)
+                    state.ai_scans_today = state.ai_scans_today[:50]
 
                     await manager.broadcast({
                         "type": "scan_results",

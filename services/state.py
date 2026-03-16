@@ -109,6 +109,10 @@ class AppState:
                     self.ai_scans_today.append(scan_entry)
                 except Exception:
                     pass
+            
+            # Auto-populate the current AI Advisor card with the most recent scan
+            if self.ai_scans_today:
+                self.ai_advisor_message = self.ai_scans_today[0]
 
         logger.info(
             f"State loaded: {len(self.open_trades)} open, "

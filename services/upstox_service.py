@@ -311,33 +311,35 @@ class UpstoxService:
         return combined
 
     def fetch_market_quote(self, instrument_key: str) -> dict | None:
-        """Fetch real-time snapshot quote using REST API (V3). Returns V2-compatible structure."""
+        """Fetch real-time snapshot quote using REST API (V3). Returns V2-compatible structure. Supports comma-separated keys."""
         if not self.is_authenticated:
             return None
-        
+
         # SKEPTIC: We use the 'quotes' endpoint instead of 'ltp' to get 'close' price for change calculation
         url = f"{self.BASE_URL}/market-quote/quotes?instrument_key={requests.utils.quote(instrument_key, safe='')}"
         try:
             resp = requests.get(url, headers=self._headers(), timeout=5)
             if resp.status_code == 200:
                 raw_data = resp.json().get("data", {})
-                
-                # Check for standard key or alt variant (often indices use : instead of | in results)
-                alt_key = instrument_key.replace("|", ":")
-                target_key = instrument_key if instrument_key in raw_data else alt_key if alt_key in raw_data else None
-                
-                if target_key:
-                    normalized = {
+
+                normalized_data = {}
+                keys_requested = instrument_key.split(",")
+                for key in keys_requested:
+                    alt_key = key.replace("|", ":")
+                    target_key = key if key in raw_data else alt_key if alt_key in raw_data else None
+                    if target_key:
+                        normalized_data[key] = raw_data[target_key]
+                    else:
+                        logger.warning(f"Upstox: {key} not found in quote data.")
+
+                if normalized_data:
+                    return {
                         "status": "success",
-                        "data": { instrument_key: raw_data[target_key] }
+                        "data": normalized_data
                     }
-                    return normalized
-                else:
-                    logger.warning(f"Upstox: {instrument_key} not found in quote data.")
             else:
                 self._handle_api_error(resp, "market_quote")
         except Exception as e:
             logger.error(f"Upstox fetch_market_quote exception: {e}")
         return None
-
 upstox_client = UpstoxService()

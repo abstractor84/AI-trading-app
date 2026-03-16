@@ -1079,11 +1079,12 @@ function renderIntradayAIHistory() {
                 <div class="isg-header"><span>Scan @ ${time}</span><span>${results.length} Candidates</span></div>`;
         results.forEach(r => {
             const cls = (r.action || '').toUpperCase() === 'BUY' ? 'buy' : 'short';
+            const conf = r.confidence !== undefined ? r.confidence : '--';
             html += `
                 <div class="isg-row" onclick="openChart('${r.ticker}')">
                     <span class="isg-ticker">${(r.ticker || '').replace('.NS','')}</span>
                     <span class="badge-${cls}">${r.action}</span>
-                    <span class="isg-conf">${r.confidence}%</span>
+                    <span class="isg-conf">${conf}%</span>
                 </div>`;
         });
         html += `</div>`;
@@ -1172,7 +1173,7 @@ function handleAIAdvisorUpdate(data) {
             const fund = r.fundamentals || {};
             const sent = r.sentiment || {};
             const signal = r.signal || r.action || 'NEUTRAL';
-            const conf = r.confidence || 0;
+            const conf = r.confidence !== undefined ? r.confidence : '--';
 
             html += `
                 <div class="stock-card ${cls}">
@@ -1184,7 +1185,7 @@ function handleAIAdvisorUpdate(data) {
                         <div class="sc-price-block">
                             <span class="sc-price sc-live-price">₹${fmt(r.live_price)}</span>
                             <div class="sc-confidence" title="AI Consistency Score">
-                                <div class="conf-bar" style="width:${conf}%; background: ${conf > 75 ? '#22c55e' : conf > 50 ? '#fbbf24' : '#ef4444'}"></div>
+                                <div class="conf-bar" style="width:${conf === '--' ? 0 : conf}%; background: ${conf > 75 ? '#22c55e' : conf > 50 ? '#fbbf24' : '#ef4444'}"></div>
                                 <span>${conf}%</span>
                             </div>
                         </div>

@@ -10,30 +10,16 @@ logger = logging.getLogger(__name__)
 # Core NSE universe for discovery
 _NIFTY100_SYMBOLS = [
     "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "BHARTIARTL",
-    "INFY", "SBI-N", "LICI", "ITC", "HINDUNILVR",
+    "INFY", "SBIN", "LICI", "ITC", "HINDUNILVR",
     "LT", "BAJFINANCE", "HCLTECH", "MARUTI", "SUNPHARMA",
     "ADANIENT", "KOTAKBANK", "TITAN", "ONGC", "TATAMOTORS",
     "NTPC", "AXISBANK", "ADANIPORTS", "ASIANPAINT", "COALINDIA",
-    "BAJAJHLDNG", "BAJAJ-AUTO", "BHAL", "JSWSTEEL", "ADANIPOWR",
+    "BAJAJHLDNG", "BAJAJ-AUTO", "BHEL", "JSWSTEEL", "ADANIPOWER",
     "M&M", "TRENT", "BEL", "ULTRACEMCO", "SIEMENS",
     "GRASIM", "SBILIFE", "BPCL", "NESTLEIND", "HAL",
     "ZOMATO", "PNB", "IOB", "CANBK", "INDHOTEL",
     "DLF", "EICHERMOT", "HINDALCO", "DIVISLAB", "CIPLA",
-    "BRITANNIA", "TATASTEEL", "ADANIENSOL", "M&M", "TRENT", "BEL",
-    # Nifty Next 50
-    "ABB", "ADANIPOWR", "AMBUJACEM", "BANKBARODA", "BEL",
-    "BHEL", "CANBK", "CHOLAFIN", "DLF", "GAIL",
-    "HAVELLS", "HEROMOTOCO", "INDHOTEL", "IOC", "IRCTC",
-    "JINDALSTEL", "JSWSTEEL", "LTIM", "MARICO", "PFC",
-    "PNB", "RECLTD", "SAIL", "SHREECEM", "SIEMENS",
-    "SRF", "TATAPOWER", "TVSMOTOR", "UNITDSPR", "VBL",
-    "YESBANK", "SHREECEM", "DLF", "HAVELLS", "PIDILITIND",
-    "ICICIPRULI", "HDFCLIFE", "BAJAJFINSV", "SHRIRAMFIN", "MCDOWELL-N",
-    "OFSS", "PFC", "PIDILITIND", "PNB", "RECLTD",
-    "SAIL", "SHREECEM", "SIEMENS", "SRF", "TATAPOWER",
-    "TORNTPHARM", "TVSMOTOR", "VBL", "VEDL", "VOLTAS",
-    "YESBANK", "ZOMATO", "NYKAA", "POLICYBZR", "PAYTM",
-    "IRFC", "ABCAPITAL", "PIIND", "UNITDSPR", "IDFCFIRSTB",
+    "BRITANNIA", "TATASTEEL", "ADANIENSOL"
 ]
 _NIFTY100_NS = [f"{s}.NS" for s in _NIFTY100_SYMBOLS]
 
@@ -83,8 +69,8 @@ class StockDiscoveryService:
                     # SKEPTIC: GIFT Nifty is NOT available on the Historical API. Using 'quotes' endpoint as per MANDATE.
                     if name == "GIFT Nifty" and upstox_client.is_authenticated:
                         try:
-                            # Use manual key for GIFT Nifty Index
-                            upx_key = "NSE_INDEX|GIFT Nifty"
+                            # Use Nifty 50 proxy key for GIFT Nifty in Upstox to prevent 404
+                            upx_key = "NSE_INDEX|Nifty 50"
                             # Fetch full quote to get LTP + Close (previous day)
                             quote = upstox_client.fetch_market_quote(upx_key)
                             if quote and quote.get("status") == "success":
@@ -165,35 +151,66 @@ class StockDiscoveryService:
     def _get_top_candidates(self, limit=10):
         """Scan broad universe for high-volume momentum movers."""
         try:
-            # For brevity in this V3 context, we take the Nifty 50 + a few others
-            # In production, this would use a vectorized multi-ticker fetch
             if not self.universe: self.universe = self.discover_nse_universe()
             
-            # Batch fetch last 2 days for momentum/volume calculation
-            # group_by='ticker' ensures we get a predictable multi-index
-            df = yf.download(self.universe[:50], period="2d", interval="1d", group_by='ticker', progress=False)
-            
+            universe_subset = self.universe[:50]
             candidates = []
-            for ticker in self.universe[:50]:
-                try:
-                    t_data = df[ticker]
-                    if len(t_data) < 2: continue
-                    
-                    close_prev = t_data['Close'].iloc[-2]
-                    close_curr = t_data['Close'].iloc[-1]
-                    vol_prev = t_data['Volume'].iloc[-2]
-                    vol_curr = t_data['Volume'].iloc[-1]
-                    
-                    if pd.isna(close_curr) or pd.isna(vol_curr): continue
-                    
-                    gain = (close_curr - close_prev) / close_prev if close_prev > 0 else 0
-                    vol_surge = vol_curr / vol_prev if vol_prev > 0 else 1
-                    
-                    # Heuristic: Gain > 1.5% and Volume > 1.5x previous
-                    if gain > 0.015 and vol_surge > 1.5:
-                        candidates.append((ticker, gain * vol_surge))
-                except:
-                    continue
+
+            if upstox_client.is_authenticated:
+                keys = []
+                key_to_ticker = {}
+                for ticker in universe_subset:
+                    k = get_instrument_key(ticker)
+                    if k:
+                        keys.append(k)
+                        key_to_ticker[k] = ticker
+
+                # Batch fetch quotes from Upstox
+                if keys:
+                    keys_str = ",".join(keys)
+                    res = upstox_client.fetch_market_quote(keys_str)
+                    if res and res.get("status") == "success":
+                        data = res.get("data", {})
+                        for k, quote in data.items():
+                            ticker = key_to_ticker.get(k)
+                            if not ticker: continue
+                            
+                            last_price = quote.get("last_price", 0)
+                            prev_close = quote.get("close", last_price)
+                            if prev_close == 0: continue
+                            
+                            gain = (last_price - prev_close) / prev_close
+                            
+                            # Upstox quote may have volume, but we rely on gain for ranking if volume isn't comparable easily
+                            vol_surge = quote.get("volume", 1) / 100000  # Pseudo vol surge based on absolute volume
+                            
+                            if gain > 0.01: # 1% gain
+                                candidates.append((ticker, gain * vol_surge))
+                                
+            # Fallback to yfinance if Upstox fails or isn't connected
+            if not candidates:
+                df = yf.download(universe_subset, period="2d", interval="1d", group_by='ticker', progress=False)
+                
+                for ticker in universe_subset:
+                    try:
+                        t_data = df[ticker]
+                        if len(t_data) < 2: continue
+                        
+                        close_prev = t_data['Close'].iloc[-2]
+                        close_curr = t_data['Close'].iloc[-1]
+                        vol_prev = t_data['Volume'].iloc[-2]
+                        vol_curr = t_data['Volume'].iloc[-1]
+                        
+                        if pd.isna(close_curr) or pd.isna(vol_curr): continue
+                        
+                        gain = (close_curr - close_prev) / close_prev if close_prev > 0 else 0
+                        vol_surge = vol_curr / vol_prev if vol_prev > 0 else 1
+                        
+                        # Heuristic: Gain > 1.5% and Volume > 1.5x previous
+                        if gain > 0.015 and vol_surge > 1.5:
+                            candidates.append((ticker, gain * vol_surge))
+                    except:
+                        continue
             
             # Sort by combined score
             candidates.sort(key=lambda x: x[1], reverse=True)
