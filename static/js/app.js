@@ -208,9 +208,11 @@ function closeChart() {
  * Changes the chart timeframe/interval.
  */
 function changeChartInterval(interval) {
-    appState.currentInterval = interval;
-    // SKEPTIC: Ensure isFirstLoad remains false during interval changes to prevent zooming
+    // SKEPTIC: Lock zoom IMMEDIATELY to prevent fitContent race
     appState.isFirstLoad = false;
+    appState.isIntervalSwitching = true;
+    appState.expectedInterval = interval;
+    appState.currentInterval = interval;
     
     // Update UI buttons
     document.querySelectorAll('.tf-btn').forEach(btn => {
@@ -345,7 +347,11 @@ function initChartInstance(container, adxContainer) {
     appState.chartInstance = LightweightCharts.createChart(container, chartOptions);
     appState.series.candles = appState.chartInstance.addCandlestickSeries({
         upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
-        wickUpColor: '#22c55e', wickDownColor: '#ef4444'
+        wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+        autoscaleInfoProvider: (orig) => {
+            if (appState.isIntervalSwitching) return null;
+            return orig();
+        }
     });
     
     // Auxiliary Series (SKEPTIC: Explicitly hide Y-axis labels to prevent clutter)
@@ -498,7 +504,35 @@ function renderChart(data) {
     ohlc = uniqueOhlc;
 
     if (ohlc.length > 0) {
+        // SKEPTIC: Manually preserve bar count (Logical Range) if not first load
+        const timeScale = appState.chartInstance.timeScale();
+        const oldLogicalRange = (!appState.isFirstLoad) ? timeScale.getVisibleLogicalRange() : null;
+
         appState.series.candles.setData(ohlc);
+        
+        // SKEPTIC: Restore logical range immediately after data set
+        if (oldLogicalRange) {
+            let attempts = 0;
+            const intervalId = setInterval(() => {
+                try {
+                    // Force the logical range (number of bars)
+                    timeScale.setVisibleLogicalRange(oldLogicalRange);
+                    if (appState.adxChart) appState.adxChart.timeScale().setVisibleLogicalRange(oldLogicalRange);
+                    
+                    if (++attempts > 10) {
+                        clearInterval(intervalId);
+                        if (data.interval === appState.expectedInterval) {
+                            appState.isIntervalSwitching = false;
+                        }
+                    }
+                } catch(e) { /* Defensive */ }
+            }, 50);
+        } else {
+            if (data.interval === appState.expectedInterval) {
+                appState.isIntervalSwitching = false;
+            }
+        }
+
         const last = ohlc[ohlc.length - 1];
         document.getElementById('legend-ltp').textContent = `LTP: ₹${last.close.toFixed(2)}`;
         document.getElementById('legend-ohlc').textContent = `O: ${last.open.toFixed(2)} H: ${last.high.toFixed(2)} L: ${last.low.toFixed(2)} C: ${last.close.toFixed(2)}`;
@@ -719,7 +753,18 @@ function renderChart(data) {
         }
     }
 
+    // SKEPTIC: Manually preserve range if not first load
+    const timeScale = appState.chartInstance.timeScale();
+    const oldRange = !appState.isFirstLoad ? timeScale.getVisibleRange() : null;
+
     appState.series.candles.setMarkers(uniqueMarkers);
+    
+    // SKEPTIC: Restore range immediately after marker set
+    if (oldRange && oldRange.from && oldRange.to) {
+        try {
+            timeScale.setVisibleRange(oldRange);
+        } catch(e) { /* Defensive */ }
+    }
     
     // SKEPTIC: Accuracy Audit
     verifySignalAccuracy(ohlc, uniqueMarkers);
@@ -729,10 +774,16 @@ function renderChart(data) {
         document.getElementById('legend-vwap').textContent = `VWAP: ₹${parseFloat(data.vwap).toFixed(2)}`;
     }
 
-    // SKEPTIC: Strict Zoom handling. Only fitContent on first ticker load.
-    if (appState.isFirstLoad && ohlc.length > 0) {
+    // SKEPTIC: Strict Zoom handling. Only fitContent on the absolute first data arrival for this ticker.
+    const incomingTicker = data.ticker ? data.ticker.toUpperCase() : "";
+    const activeTicker = appState.currentChartKey ? appState.currentChartKey.toUpperCase() : "";
+    
+    if (appState.isFirstLoad && ohlc.length > 0 && 
+        incomingTicker === activeTicker) {
+        
+        
         appState.chartInstance.timeScale().fitContent();
-        appState.isFirstLoad = false;
+        appState.isFirstLoad = false; // LOCK IT
     }
 }
 
@@ -1293,6 +1344,8 @@ function handleStateUpdate(msg) {
     renderTimeline();
     updateDaySummary();
     renderTradeHistory();
+    renderIntradayAIHistory();
+    if (msg.ai_advisor) handleAIAdvisorUpdate(msg.ai_advisor);
 }
 
 /**
@@ -1404,15 +1457,42 @@ ws.onmessage = (event) => {
                 // Requirement: Monitor news for shocks.
                 if (msg.data && msg.data.headlines) {
                     const timeline = document.getElementById('timeline-container');
-                    if (timeline) {
-                        const h = msg.data.headlines[0];
-                        if (h) {
+                    const feed = document.getElementById('sentinel-feed');
+                    
+                    msg.data.headlines.forEach(h => {
+                        // 1. Update Timeline
+                        if (timeline) {
                             const event = document.createElement('div');
                             event.className = 'timeline-event info';
-                            event.innerHTML = `<span class="time">${new Date().toLocaleTimeString()}</span> <span class="msg"><b>${h.ticker}</b>: ${h.title}</span>`;
+                            event.innerHTML = `<span class="time">${new Date().toLocaleTimeString()}</span> <span class="msg"><b>${msg.data.ticker || 'NEWS'}</b>: ${h.title}</span>`;
                             timeline.prepend(event);
                         }
-                    }
+                        
+                        // 2. Update Sentinel Feed (Sidebar)
+                        if (feed) {
+                            // Clear empty state if present
+                            if (feed.querySelector('.empty-state')) feed.innerHTML = '';
+                            
+                            const newsItem = document.createElement('div');
+                            const sentiment = h.sentiment || 'Neutral';
+                            newsItem.className = `news-item ${sentiment}`;
+                            newsItem.innerHTML = `
+                                <span class="news-title">${h.title}</span>
+                                <div class="news-meta">
+                                    <span>${msg.data.ticker || 'MACRO'}</span>
+                                    <span>${h.time || 'Just now'}</span>
+                                </div>
+                            `;
+                            // Link if available
+                            if (h.url && h.url !== '#') {
+                                newsItem.style.cursor = 'pointer';
+                                newsItem.onclick = () => window.open(h.url, '_blank');
+                            }
+                            feed.prepend(newsItem);
+                            // Keep last 15 items
+                            while (feed.children.length > 15) feed.removeChild(feed.lastChild);
+                        }
+                    });
                 }
                 break;
             case "notification":

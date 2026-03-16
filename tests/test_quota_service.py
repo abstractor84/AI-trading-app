@@ -2,7 +2,7 @@ from services.quota_service import QuotaService
 from models import ApiUsage
 import pytest
 from unittest.mock import patch
-from datetime import datetime, timedelta, UTC, UTC, UTC
+from datetime import datetime, timedelta, UTC
 
 @pytest.fixture
 def quota_svc(db_session):
@@ -17,8 +17,8 @@ def test_quota_service_defaults(mock_session, quota_svc, db_session):
     
     # Check default initialization for a provider
     status = quota_svc.check_quota("groq")
-    assert status["limit_rpd"] == 30
-    assert status["remaining_rpd"] == 30
+    assert status["limit_rpd"] == 20
+    assert status["remaining_rpd"] == 20
     assert status["can_call"] is True
     assert status["low_quota"] is False
 
@@ -26,8 +26,8 @@ def test_quota_service_defaults(mock_session, quota_svc, db_session):
 def test_quota_service_logging_and_limits(mock_session, quota_svc, db_session):
     mock_session.return_value = db_session
     
-    # Log 28 requests, bypassing the 15/min RPM limit
-    for i in range(28):
+    # Log 18 requests, bypassing the 15/min RPM limit
+    for i in range(18):
         quota_svc.log_usage("google", tokens=10)
         # Manually reset minute requests to bypass RPM
         usage = db_session.query(ApiUsage).filter_by(model_name="google").first()
@@ -46,14 +46,14 @@ def test_quota_service_logging_and_limits(mock_session, quota_svc, db_session):
     status = quota_svc.check_quota("google")
     assert status["remaining_rpd"] == 0
     assert status["low_quota"] is True
-    assert status["can_call"] is False # Max 30 reached
+    assert status["can_call"] is False # Max 20 reached
 
 @patch("services.quota_service.SessionLocal")
 def test_quota_service_rollover(mock_session, quota_svc, db_session):
     mock_session.return_value = db_session
     
     # max out
-    for _ in range(30):
+    for _ in range(20):
         quota_svc.log_usage("sambanova", tokens=1)
         
     status = quota_svc.check_quota("sambanova")
@@ -67,5 +67,6 @@ def test_quota_service_rollover(mock_session, quota_svc, db_session):
     # Since a day passed, should allow calls again
     status = quota_svc.check_quota("sambanova")
     assert status["can_call"] is True
-    assert status["remaining_rpd"] == 30
+    assert status["remaining_rpd"] == 20
     assert status["low_quota"] is False
+

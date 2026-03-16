@@ -87,10 +87,33 @@ class AppState:
             # Load dashboard stocks
             ds_list = db.query(DashboardStock).all()
             self.dashboard_watch_stocks = {ds.ticker for ds in ds_list}
+            
+            # Load today's AI Scans
+            from models import AIInteraction
+            today_str = getattr(self, 'last_reset_date', now_ist.date()).strftime("%Y-%m-%d")
+            scans = db.query(AIInteraction).filter(
+                AIInteraction.trade_date == today_str,
+                AIInteraction.prompt_type == "SCAN"
+            ).order_by(AIInteraction.timestamp.desc()).limit(50).all()
+            
+            import json
+            for scan in scans:
+                try:
+                    res = json.loads(scan.output_json)
+                    # Convert to UI format
+                    scan_entry = {
+                        "type": "SCAN", 
+                        "result": res if isinstance(res, list) else res.get("data", []), 
+                        "timestamp": scan.timestamp.strftime("%H:%M:%S") if scan.timestamp else "00:00"
+                    }
+                    self.ai_scans_today.append(scan_entry)
+                except Exception:
+                    pass
 
         logger.info(
             f"State loaded: {len(self.open_trades)} open, "
-            f"{len(self.closed_trades)} closed trades"
+            f"{len(self.closed_trades)} closed trades, "
+            f"{len(self.ai_scans_today)} AI scans"
         )
 
     def _to_dict(self, trade: Trade) -> dict:

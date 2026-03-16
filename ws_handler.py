@@ -331,10 +331,17 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                             "ema_21": 2480.0,
                             "lz_score": 0.8
                         },
-                        "risk_levels": {"stop_loss": 2480.0, "target_1": 2540.0, "target_2": 2560.0, "quantity": 10},                        "fundamentals": {"sector": "Energy", "market_cap": "17T"},
+                        "risk_levels": {"stop_loss": 2480.0, "target_1": 2540.0, "target_2": 2560.0, "quantity": 10},
+                        "fundamentals": {"sector": "Energy", "market_cap": "17T"},
                         "sentiment": {"score": 60, "label": "Bullish", "headline_count": 5},
                         "atr": 10.0
                     }]
+                    
+                    import datetime
+                    scan_entry = {"type": "SCAN", "result": mock_picks, "timestamp": datetime.datetime.now().strftime("%H:%M:%S")}
+                    state.ai_advisor_message = scan_entry
+                    state.ai_scans_today.insert(0, scan_entry)
+                    state.ai_scans_today = state.ai_scans_today[:50]
 
                     await manager.broadcast({"type": "scan_results", "data": mock_picks})
                     continue
@@ -353,7 +360,7 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     provider = getattr(state, 'ai_provider', 'google')
                     model = getattr(state, 'ai_model', 'gemini-3.1-pro')
                     search_engine = getattr(state, 'search_engine', 'ddgs')
-                    data_provider = getattr(state, 'data_provider', 'yfinance')
+                    data_provider = getattr(state, 'data_provider', 'upstox')
 
                     logger.info(f"\n=====================================")
                     logger.info(f"AI Call (Manual Scan): SCAN")

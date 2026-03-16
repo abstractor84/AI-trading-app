@@ -9,11 +9,11 @@ logger = logging.getLogger(__name__)
 
 class QuotaService:
     def __init__(self):
-        # Strict user limits: max 30/day per provider
+        # Strict user limits: max 20/day per provider
         self.defaults = {
-            "google": {"rpm": 15, "tpm": 1000000, "rpd": 30},
-            "groq": {"rpm": 30, "tpm": 144000, "rpd": 30},
-            "sambanova": {"rpm": 15, "tpm": 50000, "rpd": 30},
+            "google": {"rpm": 15, "tpm": 1000000, "rpd": 20},
+            "groq": {"rpm": 30, "tpm": 144000, "rpd": 20},
+            "sambanova": {"rpm": 15, "tpm": 50000, "rpd": 20},
         }
 
 

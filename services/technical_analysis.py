@@ -333,14 +333,16 @@ class TechnicalAnalysisService:
             return _status_cache["data"]
 
         from services.quota_service import quota_svc
-        # fetch_profile call can be slow, but it's a direct API call
-        upstox_profile = _upstox_svc.fetch_profile()
+        
+        # SKEPTIC: Actually validate the token instead of just checking if it exists
+        is_valid = _upstox_svc.validate_token()
+        upstox_profile = _upstox_svc.fetch_profile() if is_valid else None
         
         status = {
             "upstox": {
-                "connected": _upstox_svc.is_authenticated,
+                "connected": is_valid,
                 "user": upstox_profile.get("user_name") if upstox_profile else None,
-                "error": None if _upstox_svc.is_authenticated else "Missing Token"
+                "error": None if is_valid else "Token Invalid or Missing"
             },
             "ai": {
                 "remaining": max(0, 20 - quota_svc.get_total_daily_usage()),
@@ -383,6 +385,7 @@ class TechnicalAnalysisService:
             step = 60 if interval == '1m' else 300 if interval == '5m' else 900 if interval == '15m' else 3600 if interval == '1h' else 86400
             mock_ohlc = [{"time": now - i * step, "open": 100+i%5, "high": 105+i%5, "low": 95+i%5, "close": 102+i%5} for i in range(100, 0, -1)]
             return {
+                "ticker": ticker,
                 "instrument_key": ticker,
                 "current_price": 102.0,
                 "ohlc": mock_ohlc,
@@ -478,6 +481,7 @@ class TechnicalAnalysisService:
             })
 
         return {
+            "ticker": ticker,
             "instrument_key": ticker,
             "current_price": current_price,
             "ohlc": ohlc_list,

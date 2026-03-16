@@ -108,3 +108,42 @@ def test_settings_realtime_impact(page: Page, server):
     # Verify state update
     val = page.evaluate("appState.indicatorSettings.knn.window")
     assert val == 300
+
+def test_rapid_interval_switch_zoom_stability(page: Page, server):
+    """SKEPTIC: Verify rapid interval switches do not trigger zoom-out regressions."""
+    # Capture console logs
+    page.on("console", lambda msg: print(f"BROWSER: {msg.text}"))
+    page.on("pageerror", lambda exc: print(f"BROWSER ERROR: {exc}"))
+    
+    page.goto("http://localhost:8000")
+    expect(page.locator("#ws-status")).to_have_text("Live", timeout=15000)
+    
+    # 1. Open Chart (Use explicit .NS to avoid any cleaning mismatch)
+    page.fill("#global-chart-input", "RELIANCE.NS")
+    page.click("#global-chart-btn")
+    expect(page.locator("#chart-title")).to_contain_text("RELIANCE")
+    
+    # 2. Wait for first load to finish (isFirstLoad becomes false)
+    page.wait_for_function("() => window.appState.isFirstLoad === false", timeout=15000)
+    
+    # Capture initial logical range after fitContent
+    initial_logical = page.evaluate("window.appState.chartInstance.timeScale().getVisibleLogicalRange()")
+    
+    # 3. Rapid Switch 5m -> 15m -> 1h -> 1m
+    intervals = ["5m", "15m", "1h", "1m"]
+    for interval in intervals:
+        page.click(f"button[data-interval='{interval}']")
+        # Ensure isFirstLoad stays false
+        is_first = page.evaluate("window.appState.isFirstLoad")
+        assert is_first is False, f"isFirstLoad should be false during rapid switch to {interval}"
+    
+    # 4. Final verify: logical range should not be reset to 'fitContent'
+    final_logical = page.evaluate("window.appState.chartInstance.timeScale().getVisibleLogicalRange()")
+    
+    # If fitContent occurred, the range would span all 500 simulated bars
+    final_diff = final_logical['to'] - final_logical['from']
+    initial_diff = initial_logical['to'] - initial_logical['from']
+    
+    # Verify the visible candle count is preserved within a reasonable margin,
+    # rather than expecting exact index matches across different timeframes.
+    assert final_diff < 150, f"Zoom reset detected. Visible bars: {final_diff} (Expected near {initial_diff})"
