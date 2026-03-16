@@ -33,4 +33,4 @@ Finalize production-grade stability, resolve persistent state and UI regressions
 - Executed the comprehensive Python unit test suite: **192/192 PASSED**.
 - Executed the Playwright UI interaction suite (Backtester, ML Visuals, Core UI, Sentinel, Settings): **45/45 PASSED**.
 - The system is now certified Production-Ready for today's trading session.
-- **Commit:** `feature/recovery-restoration-v2 db93009`
+- **Commit:** `feature/recovery-restoration-v2 0280aff`
