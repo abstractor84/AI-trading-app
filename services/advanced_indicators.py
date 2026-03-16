@@ -150,109 +150,76 @@ class LorentzianClassifier:
         # Scaling for distance-based ML
         scaled_vals = self.scaler.fit_transform(vals)
         
-        # SKEPTIC: Ensure we have a training pool.
-        # If df is small, we should still produce signals for the latest bars.
-        # Logic: train_pool = actual_lookback, signal_window = remaining (up to 'window')
         total_len = len(features)
+        # We want to produce results for the last 'window' bars
+        start_idx = max(0, total_len - window)
         
-        # We need at least actual_lookback for training and 1 for query
-        if total_len <= actual_lookback:
-            actual_lookback = int(total_len * 0.7) # Use 70% for training
-            if actual_lookback < k: 
-                start_i = max(0, len(df) - window)
-                return [{"time": int(df.index[i].timestamp()), "signal": 0, "score": 0} for i in range(start_i, len(df))]
-
-        feat_start_idx = total_len - window
-        if feat_start_idx < actual_lookback:
-            feat_start_idx = actual_lookback
-            
-        results = []
-        
-        # ML Training Pool
-        # TV Parity: We want to train on history and query on the requested window.
-        # But we must ensure signals are available for ALL bars in the window if possible.
-        train_end = total_len - 1
-        train_start = max(0, train_end - actual_lookback)
-        
-        X_train = scaled_vals[train_start:train_end]
-        if len(X_train) < k:
-            start_i = max(0, len(df) - window)
-            return [{"time": int(df.index[i].timestamp()), "signal": 0, "score": 0} for i in range(start_i, len(df))]
-            
-        # Target: Price direction 4 bars later
+        # Targets for the whole set (Lookahead 4)
         closes = df.loc[indices, 'Close'].values
-        y_train = []
-        for j in range(train_start, train_end):
-            if j + 4 < len(indices):
-                y_train.append(1 if closes[j+4] > closes[j] else -1)
+        y_all = []
+        for j in range(total_len):
+            if j + 4 < total_len:
+                y_all.append(1 if closes[j+4] > closes[j] else -1)
             else:
-                y_train.append(0)
-        y_train = np.array(y_train)
+                y_all.append(0)
+        y_all = np.array(y_all)
 
-        # Scikit-Learn Batch Query
-        model = NearestNeighbors(n_neighbors=k, metric='manhattan', algorithm='auto')
-        model.fit(X_train)
-        
-        # Query exactly the requested window
-        query_start_idx = total_len - window
-        if query_start_idx < 0: query_start_idx = 0
-        
-        X_query = scaled_vals[query_start_idx:]
-        distances, neighbor_indices = model.kneighbors(X_query)
-        
         ema50 = features['ema50'].values
         st_dir = features['st_dir'].values
-        adx = features['adx'].values
+        adx_vals = features['adx'].values
         
         results = []
-        for i in range(len(X_query)):
-            feat_pos = query_start_idx + i
-            if feat_pos >= len(indices): break
+        
+        # SKEPTIC: Rolling Walk-Forward for Lorentzian
+        # Fit every 20 bars to maintain performance
+        step = 20
+        for i in range(start_idx, total_len, step):
+            end_batch = min(i + step, total_len)
             
-            neigh_idx = neighbor_indices[i]
-            # Gaussian Kernel Weighting for distance-based probability
-            weights = np.exp(-distances[i])
-            scores = y_train[neigh_idx] * weights
-            score = np.sum(scores) / np.sum(weights) if np.sum(weights) > 0 else 0
+            # Training pool: up to 'lookback' bars before current batch
+            train_end = i - 1
+            train_start = max(0, train_end - actual_lookback)
             
-            signal = 0
-            if score >= threshold and closes[feat_pos] > ema50[feat_pos] and st_dir[feat_pos] == 1 and adx[feat_pos] > 20: 
-                signal = 1
-            elif score <= -threshold and closes[feat_pos] < ema50[feat_pos] and st_dir[feat_pos] == -1 and adx[feat_pos] > 20: 
-                signal = -1
+            if (train_end - train_start) < k:
+                # Not enough training data yet, pad with neutral
+                for j in range(i, end_batch):
+                    results.append({"time": int(indices[j].timestamp()), "signal": 0, "score": 0})
+                continue
+
+            X_train = scaled_vals[train_start:train_end]
+            y_train = y_all[train_start:train_end]
+            
+            # Scikit-Learn Batch Query
+            model = NearestNeighbors(n_neighbors=k, metric='manhattan', algorithm='auto')
+            model.fit(X_train)
+            
+            X_query = scaled_vals[i:end_batch]
+            distances, neighbor_indices = model.kneighbors(X_query)
+            
+            for j in range(len(X_query)):
+                curr_idx = i + j
+                neigh_idx = neighbor_indices[j]
                 
-            results.append({
-                "time": int(indices[feat_pos].timestamp()),
-                "signal": int(signal),
-                "score": round(float(score), 2)
-            })
-            
-        # Ensure we return EXACTLY window results
-        if len(results) < window:
-            padding_needed = window - len(results)
-            # SKEPTIC: Padding must not exceed available data in df.index
-            # We use indices from the actual df to maintain time continuity
-            max_available = len(df.index)
-            actual_pad_count = min(padding_needed, max_available - len(results))
-            
-            pad_list = []
-            if actual_pad_count > 0:
-                for j in range(0, actual_pad_count):
-                    try:
-                        # Defensive check: j must be a valid index for df.index
-                        if j < max_available:
-                            pad_list.append({
-                                "time": int(df.index[j].timestamp()),
-                                "signal": 0,
-                                "score": 0
-                            })
-                    except Exception as e:
-                        logger.debug(f"Padding index error at {j}: {e}")
-                        continue
-            results = pad_list + results
+                # Gaussian Kernel Weighting
+                weights = np.exp(-distances[j])
+                scores = y_train[neigh_idx] * weights
+                score = np.sum(scores) / np.sum(weights) if np.sum(weights) > 0 else 0
+                
+                signal = 0
+                # SKEPTIC: Relaxed filters for Intraday frequency (ADX 15+ instead of 20)
+                if score >= threshold and closes[curr_idx] > ema50[curr_idx] and st_dir[curr_idx] == 1 and adx_vals[curr_idx] > 15: 
+                    signal = 1
+                elif score <= -threshold and closes[curr_idx] < ema50[curr_idx] and st_dir[curr_idx] == -1 and adx_vals[curr_idx] > 15: 
+                    signal = -1
+                    
+                results.append({
+                    "time": int(indices[curr_idx].timestamp()),
+                    "signal": int(signal),
+                    "score": round(float(score), 2)
+                })
 
         logger.debug(f"Lorentzian ML finished in {time.time() - start_time:.4f}s")
-        return results[:window] # Final slice safety
+        return results
 
 
 class AdaptiveSuperTrend:
@@ -404,13 +371,14 @@ class KNNTrendForecaster:
     def get_historical_shading(self, df: pd.DataFrame, window=500, **kwargs):
         """
         TradingView Parity: Continuous line with Scikit-Learn classification.
-        SKEPTIC: Enhanced with multi-feature scaling and 4-bar lookahead target.
+        SKEPTIC: Enhanced with a Rolling Walk-Forward training to ensure 
+        signals adapt to recent market regimes.
         """
         params = kwargs.get('params', {})
         k = int(params.get('k', self.k))
         
         feat_df = self._prepare_knn_features(df)
-        if feat_df is None or len(feat_df) < k + 10:
+        if feat_df is None or len(feat_df) < k + 50:
             return []
             
         indices = feat_df.index
@@ -420,59 +388,72 @@ class KNNTrendForecaster:
         scaled_vals = self.scaler.fit_transform(feat_df.values)
         
         total_len = len(feat_df)
-        query_len = min(total_len - k - 5, window) # 5 for lookahead buffer
-        start_idx = total_len - query_len
+        # We want to produce results for the last 'window' bars
+        start_idx = max(0, total_len - window)
         
-        # Training Pool: Up to 2000 bars before the query window
-        train_end = start_idx
-        train_start = max(0, train_end - 2000)
-        
-        if train_end < k:
-            # Fallback for small datasets
-            train_start = 0
-            train_end = int(total_len * 0.6)
-            start_idx = train_end
-            query_len = total_len - start_idx
-            
-        X_train = scaled_vals[train_start:train_end]
-        
-        # Target: Price direction 4 bars later (Lookahead)
-        y_train = []
-        for j in range(train_start, train_end):
+        # Target for the WHOLE dataset (Lookahead 4)
+        y_all = []
+        for j in range(total_len):
             if j + 4 < total_len:
-                y_train.append(1 if closes[j+4] > closes[j] else -1)
+                y_all.append(1 if closes[j+4] > closes[j] else -1)
             else:
-                y_train.append(0)
-        y_train = np.array(y_train)
-        
-        if len(X_train) < k:
-            return [{"time": int(indices[i].timestamp()), "value": float(closes[i]), "trend": 0, "marker": 0} for i in range(total_len - query_len, total_len)]
-            
-        model = KNeighborsClassifier(n_neighbors=k, weights='distance')
-        model.fit(X_train, y_train)
-        
-        # Batch Predict for the query window
-        X_query = scaled_vals[start_idx:]
-        preds = model.predict(X_query)
-        
+                y_all.append(0)
+        y_all = np.array(y_all)
+
         shading = []
-        prev_signal = 0
-        for i, idx_in_feat in enumerate(range(start_idx, total_len)):
-            pred = preds[i]
-            # Baseline: 14-period EMA for visual reference
-            b_slice = closes[max(0, idx_in_feat-14):idx_in_feat+1]
-            baseline = np.mean(b_slice)
+        prev_trend = 0
+        
+        # SKEPTIC: To avoid O(N^2) complexity while maintaining 'rolling' behavior,
+        # we'll use a sliding window of 500 bars for training.
+        # For performance, we'll re-fit every 20 bars and batch predict.
+        step = 20
+        for i in range(start_idx, total_len, step):
+            end_batch = min(i + step, total_len)
             
-            # Marker logic: only on trend change
-            marker = int(pred) if (pred != prev_signal and prev_signal != 0) else 0
-            prev_signal = pred
+            # Training pool: up to 1000 bars before current batch
+            train_end = i - 1
+            train_start = max(0, train_end - 1000)
             
-            shading.append({
-                "time": int(indices[idx_in_feat].timestamp()), 
-                "value": round(float(baseline), 2),
-                "trend": int(pred),
-                "marker": marker
-            })
+            if (train_end - train_start) < k:
+                # Not enough training data yet, use what we have or skip
+                for j in range(i, end_batch):
+                    shading.append({
+                        "time": int(indices[j].timestamp()), 
+                        "value": round(float(closes[j]), 2),
+                        "trend": 0, "marker": 0
+                    })
+                continue
+
+            X_train = scaled_vals[train_start:train_end]
+            y_train = y_all[train_start:train_end]
+            
+            model = KNeighborsClassifier(n_neighbors=k, weights='distance')
+            model.fit(X_train, y_train)
+            
+            X_query = scaled_vals[i:end_batch]
+            preds = model.predict(X_query)
+            
+            for j, pred in enumerate(preds):
+                curr_idx = i + j
+                # Baseline: 14-period EMA for visual reference
+                b_slice = closes[max(0, curr_idx-14):curr_idx+1]
+                baseline = np.mean(b_slice)
+                
+                # Marker logic: only on trend change (Transitions)
+                # SKEPTIC: Ensure we don't spam markers. 
+                # If prev_trend was 0, first non-zero is a marker.
+                marker = 0
+                if pred != prev_trend:
+                    marker = int(pred)
+                
+                prev_trend = pred
+                
+                shading.append({
+                    "time": int(indices[curr_idx].timestamp()), 
+                    "value": round(float(baseline), 2),
+                    "trend": int(pred),
+                    "marker": marker
+                })
             
         return shading
 

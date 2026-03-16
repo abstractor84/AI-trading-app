@@ -10,7 +10,7 @@ const appState = {
     aiAdvisor: null, aiScansToday: [], actionTimeline: [], aiCallsToday: 0, aiCallsLimit: 7,
     chartInstance: null, adxChart: null, currentChartData: null,
     currentChartKey: null, currentInterval: '5m',
-    series: { candles: null, adxLine: null, rsiLine: null, stUp: null, stDown: null, knnUp: null, knnDown: null, projLine: null, upperBand: null, lowerBand: null },
+    series: { candles: null, adxLine: null, rsiLine: null, stLine: null, knnUp: null, knnDown: null, projLine: null, upperBand: null, lowerBand: null, vwap: null },
     indicatorSettings: {
         st: { atr_period: 10, factor: 3.0, training_len: 100, p_low: 0.25, p_med: 0.5, p_high: 0.75 },
         lz: { k: 8, lookback: 2000, threshold: 0.5, use_volatility: true },
@@ -340,7 +340,8 @@ function initChartInstance(container, adxContainer) {
             borderColor: 'rgba(139,148,158,0.2)',
             timeVisible: true,
             secondsVisible: false,
-            rightOffset: 20
+            rightOffset: 50, // SKEPTIC: Increased for scrolling beyond current candle
+            barSpacing: 6
         }
     };
 
@@ -361,10 +362,26 @@ function initChartInstance(container, adxContainer) {
         axisLabelVisible: false
     };
 
-    appState.series.stUp = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#22c55e' });
-    appState.series.stDown = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#ef4444' });
+    appState.series.stLine = appState.chartInstance.addLineSeries({ 
+        lineWidth: 2, 
+        priceLineVisible: false, 
+        lastValueVisible: false,
+        axisLabelVisible: false,
+        title: 'ST' 
+    });
     appState.series.knnUp = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#a855f7' });
     appState.series.knnDown = appState.chartInstance.addLineSeries({ ...auxOptions, color: '#f97316' });
+    appState.series.vwap = appState.chartInstance.addLineSeries({ 
+        color: 'rgba(255, 193, 7, 0.8)', 
+        lineWidth: 1, 
+        lineStyle: 3, 
+        title: 'VWAP',
+        lastValueVisible: false,
+        priceLineVisible: false,
+        axisLabelVisible: false,
+        autoscaleInfoProvider: () => null
+    });
+
 
     appState.adxChart = LightweightCharts.createChart(adxContainer, {
         ...chartOptions, height: 150,
@@ -580,54 +597,42 @@ function renderChart(data) {
         }
     }
 
-    // 2. Adaptive SuperTrend (TV Parity: Color Change + Regime Numbers)
+    // 2. Adaptive SuperTrend (AlgoAlpha Style: Single line with dynamic coloring)
     if (data.ml_adaptive_st && data.ml_adaptive_st.time) {
         const trend = data.ml_adaptive_st.trend;
         const stTimes = data.ml_adaptive_st.time;
         const stVals = data.ml_adaptive_st.value;
         const regimes = data.ml_adaptive_st.regime || [];
         
-        const upPoints = [];
-        const downPoints = [];
-        
+        const stPoints = [];
         for (let i = 0; i < stTimes.length; i++) {
             const time = Number(stTimes[i]) + 19800;
-            const val = parseFloat(stVals[i]);
             const tr = trend[i];
+            const val = parseFloat(stVals[i]);
             
-            if (tr === 1) {
-                upPoints.push({ time, value: val });
-                if (i > 0 && trend[i - 1] === -1) {
-                    downPoints.push({ time, value: val }); // Transition anchor
-                }
-            } else if (tr === -1) {
-                downPoints.push({ time, value: val });
-                if (i > 0 && trend[i - 1] === 1) {
-                    upPoints.push({ time, value: val }); // Transition anchor
-                }
-            }
+            stPoints.push({ 
+                time, 
+                value: val,
+                color: tr === 1 ? '#22c55e' : '#ef4444' 
+            });
 
-            // Regime Markers (1, 2, 3) - Show at flips or every 25 bars
-            if (showST && (i === 0 || trend[i] !== trend[i - 1] || i % 25 === 0)) {
+            // Regime Markers (1, 2, 3) - Show at flips or every 30 bars
+            if (showST && (i === 0 || trend[i] !== trend[i - 1] || i % 30 === 0)) {
                 if (validTimes.has(time)) {
                     combinedMarkers.push({
                         time,
                         position: tr === 1 ? 'belowBar' : 'aboveBar',
-                        color: tr === 1 ? '#34d399' : '#f87171',
-                        shape: 'circle',
+                        color: tr === 1 ? '#22c55e' : '#ef4444',
+                        shape: tr === 1 ? 'arrowUp' : 'arrowDown',
                         text: regimes[i] ? regimes[i].toString() : ''
                     });
                 }
             }
         }
         
-        if (appState.series.stUp) {
-            appState.series.stUp.setData(upPoints.sort((a, b) => a.time - b.time));
-            appState.series.stUp.applyOptions({ visible: showST, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
-        }
-        if (appState.series.stDown) {
-            appState.series.stDown.setData(downPoints.sort((a, b) => a.time - b.time));
-            appState.series.stDown.applyOptions({ visible: showST, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
+        if (appState.series.stLine) {
+            appState.series.stLine.setData(stPoints.sort((a, b) => a.time - b.time));
+            appState.series.stLine.applyOptions({ visible: showST });
         }
 
         // Update Legend
@@ -772,6 +777,14 @@ function renderChart(data) {
     // VWAP Legend
     if (data.vwap) {
         document.getElementById('legend-vwap').textContent = `VWAP: ₹${parseFloat(data.vwap).toFixed(2)}`;
+        if (appState.series.vwap && ohlc.length > 0) {
+            // Draw a horizontal line from start to end of OHLC
+            const vwapVal = parseFloat(data.vwap);
+            appState.series.vwap.setData([
+                { time: ohlc[0].time, value: vwapVal },
+                { time: ohlc[ohlc.length - 1].time, value: vwapVal }
+            ]);
+        }
     }
 
     // SKEPTIC: Strict Zoom handling. Only fitContent on the absolute first data arrival for this ticker.
@@ -781,8 +794,24 @@ function renderChart(data) {
     if (appState.isFirstLoad && ohlc.length > 0 && 
         incomingTicker === activeTicker) {
         
+        // SKEPTIC: Focus on TODAY only (9:15 AM IST onwards)
+        const now = new Date();
+        const today915 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 15, 0).getTime() / 1000;
+        const ist915 = today915 + 19800; // Local IST epoch
         
-        appState.chartInstance.timeScale().fitContent();
+        const lastTime = ohlc[ohlc.length - 1].time;
+        
+        // If we have data today, focus from 9:15 to latest
+        if (lastTime > ist915) {
+            console.log(`SKEPTIC: Focusing today from 9:15 AM IST`);
+            appState.chartInstance.timeScale().setVisibleRange({
+                from: ist915,
+                to: lastTime + (60 * 30) // 30 mins buffer for projection
+            });
+        } else {
+            appState.chartInstance.timeScale().fitContent();
+        }
+        
         appState.isFirstLoad = false; // LOCK IT
     }
 }
@@ -1465,11 +1494,12 @@ ws.onmessage = (event) => {
                     const feed = document.getElementById('sentinel-feed');
                     
                     msg.data.headlines.forEach(h => {
+                        const eventTicker = h.ticker || msg.data.ticker || 'NEWS';
                         // 1. Update Timeline
                         if (timeline) {
                             const event = document.createElement('div');
                             event.className = 'timeline-event info';
-                            event.innerHTML = `<span class="time">${new Date().toLocaleTimeString()}</span> <span class="msg"><b>${msg.data.ticker || 'NEWS'}</b>: ${h.title}</span>`;
+                            event.innerHTML = `<span class="time">${new Date().toLocaleTimeString()}</span> <span class="msg"><b>${eventTicker}</b>: ${h.title}</span>`;
                             timeline.prepend(event);
                         }
                         
@@ -1480,11 +1510,11 @@ ws.onmessage = (event) => {
                             
                             const newsItem = document.createElement('div');
                             const sentiment = h.sentiment || 'Neutral';
-                            newsItem.className = `news-item ${sentiment}`;
+                            newsItem.className = `news-item ${sentiment.toLowerCase()}`; // Ensure class name is lowercase for CSS (e.g. 'negative', 'bullish')
                             newsItem.innerHTML = `
                                 <span class="news-title">${h.title}</span>
                                 <div class="news-meta">
-                                    <span>${msg.data.ticker || 'MACRO'}</span>
+                                    <span>${eventTicker}</span>
                                     <span>${h.time || 'Just now'}</span>
                                 </div>
                             `;

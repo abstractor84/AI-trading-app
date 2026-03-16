@@ -145,8 +145,8 @@ class SentinelService:
         if open_trades:
             pos_tickers = [t['ticker'].replace('.NS', '') for t in open_trades]
             # Combined query for speed and context
-            pos_query = f"({' OR '.join(pos_tickers)}) (stock news OR breaking OR results OR alert)"
-            macro_query = "India market (war OR tariff OR sanctions OR politics OR global shock OR RBI OR Fed)"
+            pos_query = f"(after:24h) ({' OR '.join(pos_tickers)}) (stock news OR breaking OR results OR alert)"
+            macro_query = "(after:24h) India market (war OR tariff OR sanctions OR politics OR global shock OR RBI OR Fed)"
             
             for q in [pos_query, macro_query]:
                 results = await self._fetch_news(q, state, manager)
@@ -181,7 +181,7 @@ class SentinelService:
         # ─── MODE 2: WITHOUT POSITION (Opportunity Scan) ─────────────
         watchlist = [t.replace('.NS', '') for t in watchlist_tickers if t not in [p['ticker'] for p in open_trades]]
         if watchlist:
-            watch_query = f"({' OR '.join(watchlist[:5])}) stock news breaking OR surge OR order"
+            watch_query = f"(after:24h) ({' OR '.join(watchlist[:5])}) stock news breaking OR surge OR order"
             results = await self._fetch_news(watch_query, state, manager)
             for item in results:
                 title = self._safe_get(item, ['title', 'text'])
@@ -209,6 +209,13 @@ class SentinelService:
         """
         Sentinel news scanning MUST always use DDGS (Free/Unlimited).
         """
+        import os
+        if os.getenv("SIMULATION", "false").lower() == "true":
+            # SKEPTIC: Avoid DDGS in simulation to prevent segment faults and save quotas/API rate limits.
+            return [
+                {"title": f"SIM: Breaking news for {query[:20]}...", "url": "http://sim.news/1", "text": "Simulated news content."},
+                {"title": "SIM: Market remains in steady trend", "url": "http://sim.news/2", "text": "Steady trend continues."}
+            ]
         try:
             return await self._fetch_ddgs(query)
         except Exception as e:
@@ -242,13 +249,16 @@ class SentinelService:
 
     async def _fetch_headlines_with_links(self, query: str) -> list:
         """Fetch latest news titles and links via DDGS."""
+        import os
+        if os.getenv("SIMULATION", "false").lower() == "true":
+            return [{"title": f"SIM: News headline for {query[:10]}", "url": "http://sim.news"}]
         try:
             def get_news():
                 with _ddgs_lock:
                     with DDGS() as ddgs:
                         results = list(ddgs.news(query, max_results=20))
                         return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
-            
+
             return await asyncio.to_thread(get_news)
         except Exception as e:
             logger.debug(f"SKEPTIC: DDGS fetch in Sentinel failed: {e}")

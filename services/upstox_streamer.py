@@ -58,7 +58,7 @@ class UpstoxLiveStream:
         for key in instrument_keys:
             self.subscribed_keys.add(key)
             
-        if self.ws and self.ws.open:
+        if self.ws and not self.ws.closed:
             asyncio.create_task(self._send_subscription_request(instrument_keys))
             
     async def _send_subscription_request(self, keys):

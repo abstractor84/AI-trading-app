@@ -78,18 +78,37 @@ class PriceProjector:
 
         # How many candles to project
         if n_forecast is None:
-            now = datetime.now()
-            current_min = now.hour * 60 + now.minute
+            # Use data's latest time to calculate remaining minutes, not system time
+            # because data might be historical or timezone-shifted
+            last_idx = today_df.index[-1]
+            # Convert to IST if it's UTC
+            if last_idx.tz is not None and str(last_idx.tz) == "UTC":
+                last_idx = last_idx.tz_convert('Asia/Kolkata')
+            
+            current_min = last_idx.hour * 60 + last_idx.minute
             remaining_mins = self.MARKET_CLOSE_MIN - current_min
             
-            # If after hours, use fallback window
+            # SKEPTIC: Strict capping. Do not project past 15:30.
             if remaining_mins <= 0:
-                n_forecast = 30
+                n_forecast = 0 # No projection needed after market close
             else:
-                n_forecast = max(10, remaining_mins // interval_minutes)
-
+                n_forecast = remaining_mins // interval_minutes
+                
         # Calculate VWAP as gravity anchor
         vwap = self._compute_vwap(today_df)
+
+        # If no forecast needed (after hours), return empty projection
+        if n_forecast <= 0:
+            return {
+                "ohlc": [{"time": idx.strftime("%Y-%m-%dT%H:%M:%S"), "open": round(float(row['Open']), 2), "high": round(float(row['High']), 2), "low": round(float(row['Low']), 2), "close": round(float(row['Close']), 2)} for idx, row in today_df.iterrows()],
+                "projection": [],
+                "upper_band": [],
+                "lower_band": [],
+                "timestamps": [],
+                "current_price": current_price,
+                "vwap": vwap,
+                "models_used": ["None (After Market Close)"]
+            }
 
         # ─── Model 1: Fourier Decomposition (40%) ───────────────
         fourier_proj = self._fourier_projection(prices, n_forecast)

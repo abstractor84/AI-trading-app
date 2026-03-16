@@ -83,3 +83,24 @@ def test_st_regime_mapping():
     assert res is not None
     assert "regime" in res
     assert len(set(res['regime'])) > 1 
+
+def test_knn_recent_marker_presence():
+    """SKEPTIC: Ensure KNN doesn't just show markers at the start. Verified in last 20% of window."""
+    # Create 1000 bars of data with multiple trend changes
+    dates = pd.date_range(start="2023-01-01", periods=1000, freq="5min")
+    x = np.linspace(0, 10 * np.pi, 1000)
+    price = 100 + 10 * np.sin(x) + np.random.normal(0, 0.1, 1000)
+    
+    df = pd.DataFrame({
+        "Open": price - 0.5, "High": price + 1.0, "Low": price - 1.0, "Close": price, "Volume": 1000
+    }, index=dates).astype(float)
+    
+    # window=800
+    shading = knn_forecaster.get_historical_shading(df, window=800)
+    assert len(shading) == 800
+    
+    # Check last 160 bars (20% of 800)
+    recent = shading[-160:]
+    markers = [s['marker'] for s in recent if s['marker'] != 0]
+    
+    assert len(markers) >= 1, "Should have at least one KNN marker in the most recent 20% of the chart"

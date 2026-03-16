@@ -24,6 +24,7 @@ async def test_subscribe(streamer):
     streamer._send_subscription_request = AsyncMock()
     streamer.ws = MagicMock()
     streamer.ws.open = True
+    streamer.ws.closed = False
     
     streamer.subscribe("NSE_EQ|INE1234")
     assert "NSE_EQ|INE1234" in streamer.subscribed_keys

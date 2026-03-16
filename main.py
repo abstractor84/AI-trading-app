@@ -52,9 +52,21 @@ os.makedirs("static/js", exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("V2 Background Engine starting")
-    task = asyncio.create_task(bg_engine.run())
+    bg_task = asyncio.create_task(bg_engine.run())
+    
+    # Start Upstox Live Streamer
+    from services.upstox_streamer import get_streamer
+    async def global_tick_handler(tick):
+        await manager.broadcast({
+            "type": "tick",
+            "data": tick
+        })
+    streamer = get_streamer(global_tick_handler)
+    stream_task = asyncio.create_task(streamer.connect_and_stream())
+    
     yield
-    task.cancel()
+    bg_task.cancel()
+    stream_task.cancel()
 
 app = FastAPI(title="AI Trading Companion V2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")

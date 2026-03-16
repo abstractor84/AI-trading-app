@@ -66,31 +66,7 @@ class StockDiscoveryService:
             for name, ticker in ticker_map.items():
                 try:
                     data = None
-                    # SKEPTIC: GIFT Nifty is NOT available on the Historical API. Using 'quotes' endpoint as per MANDATE.
-                    if name == "GIFT Nifty" and upstox_client.is_authenticated:
-                        try:
-                            # Use Nifty 50 proxy key for GIFT Nifty in Upstox to prevent 404
-                            upx_key = "NSE_INDEX|Nifty 50"
-                            # Fetch full quote to get LTP + Close (previous day)
-                            quote = upstox_client.fetch_market_quote(upx_key)
-                            if quote and quote.get("status") == "success":
-                                q_data = quote["data"].get(upx_key, {})
-                                current = q_data.get("last_price", 0)
-                                prev = q_data.get("close", current) # 'close' is previous day close in Upstox quotes
-                                
-                                change = current - prev
-                                pct = (change / prev * 100) if prev != 0 else 0
-                                data = {
-                                    "value": round(float(current), 2),
-                                    "change": round(float(change), 2),
-                                    "change_pct": round(float(pct), 2)
-                                }
-                                logger.info(f"SKEPTIC: GIFT Nifty fetched via Upstox Quotes: {data['value']}")
-                            else:
-                                logger.warning(f"SKEPTIC: Upstox GIFT Nifty quote empty or failed.")
-                        except Exception as inner_e:
-                            logger.error(f"SKEPTIC: GIFT Nifty Upstox quote fetch failed: {inner_e}")
-
+                    # SKEPTIC: Use ^NSEI proxy for GIFT Nifty as per MANDATE (yfinance fallback)
                     if data is None:
                         if ticker not in cache:
                             t = yf.Ticker(ticker)

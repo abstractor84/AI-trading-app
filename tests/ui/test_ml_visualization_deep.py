@@ -50,8 +50,8 @@ def test_ml_indicator_visibility_and_legend_sync(page: Page):
     expect(page.locator("#legend-st")).not_to_contain_text("--", timeout=5000)
     
     # Check if series object exists in state
-    has_st = page.evaluate("appState.series.stUp !== null && appState.series.stDown !== null")
-    assert has_st, "ST series (Up/Down) should be initialized"
+    has_st = page.evaluate("appState.series.stLine !== null")
+    assert has_st, "ST series (Line) should be initialized"
     
     # 2. Test Lorentzian (LZ) markers
     page.check("#toggle-lz")

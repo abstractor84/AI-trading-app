@@ -22,7 +22,8 @@ def sample_df():
 
 def test_fetch_ohlcv_all(svc):
     with patch("services.technical_analysis._upstox_svc") as mock_upstox, \
-         patch("services.technical_analysis.yf.Ticker") as mock_ticker:
+         patch("services.technical_analysis.yf.Ticker") as mock_ticker, \
+         patch("os.getenv", return_value="false"):
         
         # 1. Upstox success
         mock_upstox.is_authenticated = True
@@ -149,21 +150,22 @@ def test_evaluate_math_probability_more_branches(svc):
 
 @patch("services.technical_analysis.yf.download")
 @patch("services.technical_analysis.yf.Ticker")
-def test_fetch_ohlcv_yfinance_download_fallback(mock_ticker, mock_download, svc):
+@patch("os.getenv", return_value="false")
+def test_fetch_ohlcv_yfinance_download_fallback(mock_os, mock_ticker, mock_download, svc):
     from services.technical_analysis import _upstox_svc
     _upstox_svc.is_authenticated = False
     mock_ticker.return_value.history.return_value = pd.DataFrame()
     mock_df = pd.DataFrame({"Close": [100.0]}, index=[pd.Timestamp.now()])
     mock_download.return_value = mock_df
-    
+
     res = svc.fetch_ohlcv("TICKER")
     assert not res.empty
     assert mock_download.called
 
 def test_fetch_ohlcv_exceptions(svc):
-    with patch("services.technical_analysis.yf.Ticker", side_effect=Exception("Fetch Fail")):
+    with patch("services.technical_analysis.yf.Ticker", side_effect=Exception("Fetch Fail")), \
+         patch("os.getenv", return_value="false"):
         res = svc.fetch_ohlcv("TICKER")
         assert res.empty
-
 
 

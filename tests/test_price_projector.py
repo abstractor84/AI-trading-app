@@ -7,9 +7,10 @@ from services.price_projector import PriceProjector, price_projector
 
 @pytest.fixture
 def sample_df():
-    # Create 100 minutes of price data
-    times = [datetime.now() - timedelta(minutes=i) for i in range(100)]
-    times.reverse()
+    # Create 100 minutes of price data starting at 10:00 AM today
+    now = datetime.now()
+    market_start = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    times = [market_start + timedelta(minutes=i) for i in range(100)]
     df = pd.DataFrame({
         "Open": np.linspace(100, 110, 100),
         "High": np.linspace(101, 111, 100),
@@ -21,14 +22,17 @@ def sample_df():
 
 def test_generate_projection_basic(sample_df):
     """Test basic projection generation."""
-    result = price_projector.generate_projection(sample_df, interval_minutes=1)
-    
-    assert "projection" in result
-    assert "upper_band" in result
-    assert "lower_band" in result
-    assert len(result["projection"]) > 0
-    assert len(result["projection"]) == len(result["timestamps"])
-    assert result["current_price"] == pytest.approx(110.5)
+    # SKEPTIC: Ensure we are within market hours for projection
+    with patch("services.price_projector.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime.now().replace(hour=11, minute=0)
+        result = price_projector.generate_projection(sample_df, interval_minutes=1)
+        
+        assert "projection" in result
+        assert "upper_band" in result
+        assert "lower_band" in result
+        assert len(result["projection"]) > 0
+        assert len(result["projection"]) == len(result["timestamps"])
+        assert result["current_price"] == pytest.approx(110.5)
 
 def test_insufficient_data():
     """Test error handling for small dataframes."""
@@ -104,13 +108,16 @@ def test_fallback_yesterday_data(sample_df):
     assert result["current_price"] == pytest.approx(sample_df["Close"].iloc[-1])
 
 def test_n_forecast_fallback(sample_df):
-    """Test minimum forecast window when time is after market close."""
-    # Mock datetime.now() to be 4 PM (past close)
-    with patch("services.price_projector.datetime") as mock_dt:
-        mock_dt.now.return_value = datetime.now().replace(hour=16, minute=0)
-        # Should use minimum fallback window if n_forecast is None
-        result = price_projector.generate_projection(sample_df)
-        assert len(result["projection"]) == 30 
+    """Test forecast window when time is after market close."""
+    # SKEPTIC: Update sample_df to end at 4 PM
+    now = datetime.now()
+    market_end = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    sample_df.index = [market_end - timedelta(minutes=100-i) for i in range(100)]
+    
+    # Mandate forbids ghost data after 15:30. Should be 0.
+    result = price_projector.generate_projection(sample_df)
+    assert len(result["projection"]) == 0
+    assert "None (After Market Close)" in result["models_used"] 
 
 def test_explicit_n_forecast(sample_df):
     """Test that explicit n_forecast is respected."""

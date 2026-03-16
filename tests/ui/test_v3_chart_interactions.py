@@ -81,7 +81,7 @@ def test_y_axis_declutter(page: Page, server):
     page.wait_for_selector("#chart-container canvas", timeout=15000)
     
     # Ensure auxiliary series have labels hidden
-    is_st_hidden = page.evaluate("() => appState.series.stUp.options().lastValueVisible === false")
+    is_st_hidden = page.evaluate("() => appState.series.stLine.options().lastValueVisible === false")
     is_knn_hidden = page.evaluate("() => appState.series.knnUp.options().lastValueVisible === false")
     
     assert is_st_hidden, "ST Y-axis label should be hidden"
