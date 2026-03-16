@@ -1419,16 +1419,20 @@ ws.onmessage = (event) => {
                 // Handle 90-day history if implemented in history page
                 const histBody = document.getElementById('history-body');
                 if (histBody) {
-                    histBody.innerHTML = (msg.data || []).map(t => `
-                        <tr>
-                            <td>${t.close_time}</td>
-                            <td>${t.ticker}</td>
-                            <td>${t.action}</td>
+                    histBody.innerHTML = (msg.data || []).map(t => {
+                        const cleanTicker = (t.ticker || '').replace('.NS', '');
+                        const fullTicker = (t.ticker || '').endsWith('.NS') ? t.ticker : `${t.ticker}.NS`;
+                        return `
+                        <tr class="history-row">
+                            <td class="hist-date">${t.close_time}</td>
+                            <td><span class="hist-ticker aih-ticker" onclick="openChart('${fullTicker}')" style="cursor: pointer; text-decoration: underline; color: var(--primary);">${cleanTicker}</span></td>
+                            <td><span class="badge-${(t.action || '').toUpperCase() === 'BUY' ? 'buy' : 'short'}">${t.action}</span></td>
                             <td>${t.quantity}</td>
-                            <td>₹${t.entry_price.toFixed(2)}</td>
-                            <td>₹${t.exit_price.toFixed(2)}</td>
-                            <td class="${t.pnl >= 0 ? 'positive' : 'negative'}">₹${t.pnl.toFixed(2)}</td>
-                        </tr>`).join('');
+                            <td>₹${fmt(t.entry_price)}</td>
+                            <td>₹${fmt(t.exit_price)}</td>
+                            <td class="${t.pnl >= 0 ? 'positive' : 'negative'}">₹${fmt(t.pnl)}</td>
+                        </tr>`;
+                    }).join('');
                 }
                 break;
             case "scan_results":
