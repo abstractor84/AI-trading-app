@@ -33,7 +33,7 @@ Finalize production-grade stability, resolve persistent state and UI regressions
 - Executed the comprehensive Python unit test suite: **192/192 PASSED**.
 - Executed the Playwright UI interaction suite (Backtester, ML Visuals, Core UI, Sentinel, Settings): **45/45 PASSED**.
 - The system is now certified Production-Ready for today's trading session.
-- **Commit:** `feature/recovery-restoration-v2 f9f9f9f` (Proposed)
+- **Commit:** `feature/recovery-restoration-v2 ca08bf0`
 
 ## 8. Final Skeptic Audit (V3 Certification)
 - **GIFT Nifty:** Switched from `^NSEI` proxy to native Upstox `NSE_INDEX|GIFT Nifty` as per mandatory rules.
