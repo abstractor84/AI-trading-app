@@ -209,13 +209,6 @@ class SentinelService:
         """
         Sentinel news scanning MUST always use DDGS (Free/Unlimited).
         """
-        import os
-        if os.getenv("SIMULATION", "false").lower() == "true":
-            # SKEPTIC: Avoid DDGS in simulation to prevent segment faults and save quotas/API rate limits.
-            return [
-                {"title": f"SIM: Breaking news for {query[:20]}...", "url": "http://sim.news/1", "text": "Simulated news content."},
-                {"title": "SIM: Market remains in steady trend", "url": "http://sim.news/2", "text": "Steady trend continues."}
-            ]
         try:
             return await self._fetch_ddgs(query)
         except Exception as e:
@@ -230,6 +223,12 @@ class SentinelService:
 
     async def _fetch_ddgs(self, query: str):
         """Fetch news using DDGS with thread safety and safe field extraction."""
+        import os
+        if os.getenv("SIMULATION", "false").lower() == "true":
+            return [
+                {"title": f"SIM: Breaking news for {query[:20]}...", "url": "http://sim.news/1", "time": "Just now"},
+                {"title": "SIM: Market remains in steady trend", "url": "http://sim.news/2", "time": "1 hour ago"}
+            ]
         try:
             def sync_fetch():
                 from datetime import datetime, timedelta
@@ -287,21 +286,8 @@ class SentinelService:
         return [h.get('title', '') for h in res]
 
     async def _fetch_headlines_with_links(self, query: str) -> list:
-        """Fetch latest news titles and links via DDGS."""
-        import os
-        if os.getenv("SIMULATION", "false").lower() == "true":
-            return [{"title": f"SIM: News headline for {query[:10]}", "url": "http://sim.news"}]
-        try:
-            def get_news():
-                with _ddgs_lock:
-                    with DDGS() as ddgs:
-                        results = list(ddgs.news(query, max_results=20))
-                        return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
-
-            return await asyncio.to_thread(get_news)
-        except Exception as e:
-            logger.debug(f"SKEPTIC: DDGS fetch in Sentinel failed: {e}")
-            return []
+        """Fetch latest news titles and links via DDGS with strict 24h filtering."""
+        return await self._fetch_ddgs(query)
 
     def _check_keywords(self, text: str) -> set:
         """Check if any critical keywords are in the text."""
