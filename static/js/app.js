@@ -340,9 +340,8 @@ function initChartInstance(container, adxContainer) {
             borderColor: 'rgba(139,148,158,0.2)',
             timeVisible: true,
             secondsVisible: false,
-            rightOffset: 300, // SKEPTIC: Increased to 5h (300 mins) to allow scrolling far past 15:30 close
             barSpacing: 6,
-            shiftVisibleRangeOnNewBar: false, // MANDATORY: Prevent chart from jumping to latest bar on new tick if user is scrolling past 15:30
+            shiftVisibleRangeOnNewBar: false, // MANDATORY: Prevent chart from jumping to latest bar on new tick
             lockVisibleTimeRangeOnResize: true
         }
     };
@@ -531,23 +530,18 @@ function renderChart(data) {
         
         // SKEPTIC: Restore logical range immediately after data set
         if (oldLogicalRange) {
-            let attempts = 0;
-            const intervalId = setInterval(() => {
+            setTimeout(() => {
                 try {
-                    // Force the logical range (number of bars)
+                    // Force the logical range (number of bars) ONCE
                     timeScale.setVisibleLogicalRange(oldLogicalRange);
                     if (appState.adxChart) appState.adxChart.timeScale().setVisibleLogicalRange(oldLogicalRange);
-                    
-                    if (++attempts > 10) {
-                        clearInterval(intervalId);
-                        if (data.interval === appState.expectedInterval) {
-                            appState.isIntervalSwitching = false;
-                        }
+
+                    if (data.interval === appState.expectedInterval) {
+                        appState.isIntervalSwitching = false;
                     }
                 } catch(e) { /* Defensive */ }
             }, 50);
-        } else {
-            if (data.interval === appState.expectedInterval) {
+        } else {            if (data.interval === appState.expectedInterval) {
                 appState.isIntervalSwitching = false;
             }
         }
@@ -1197,18 +1191,21 @@ function handleBacktestResults(results) {
  * Renders new AI Advisor results (Rich Stock Cards).
  */
 function handleAIAdvisorUpdate(data) {
-    if (!data) return;
-    appState.aiAdvisor = data;
-    
     const section = document.getElementById('ai-result-section');
     const body = document.getElementById('ai-result-body');
     if (!section || !body) return;
 
+    if (!data) {
+        appState.aiAdvisor = null;
+        body.innerHTML = '<div class="ai-empty">No active recommendations.</div>';
+        return;
+    }
+
+    appState.aiAdvisor = data;
     section.style.display = 'block';
     const result = data.result;
 
-    if (Array.isArray(result)) {
-        if (result.length === 0) {
+    if (Array.isArray(result)) {        if (result.length === 0) {
             body.innerHTML = '<div class="ai-empty">No high-probability setups identified in this scan. Efficiency over frequency. ✅</div>';
             return;
         }
@@ -1396,7 +1393,7 @@ function handleStateUpdate(msg) {
     updateDaySummary();
     renderTradeHistory();
     renderIntradayAIHistory();
-    if (msg.ai_advisor) handleAIAdvisorUpdate(msg.ai_advisor);
+    if (msg.ai_advisor !== undefined) handleAIAdvisorUpdate(msg.ai_advisor);
 }
 
 /**
@@ -1804,11 +1801,11 @@ function closeTrade(tradeId, exitPrice) {
     if (!confirm(`Confirm exit for trade ${tradeId} at ₹${exitPrice}?`)) return;
     ws.send(JSON.stringify({
         action: 'close_trade',
-        trade_id: tradeId,
+        trade_id: String(tradeId),
         exit_price: parseFloat(exitPrice)
     }));
     // SKEPTIC: Immediate UI cleanup for better UX (backend will confirm via trades_update)
-    appState.openTrades = appState.openTrades.filter(t => t.id !== tradeId);
+    appState.openTrades = appState.openTrades.filter(t => String(t.id) !== String(tradeId));
     renderPositions();
     updateDaySummary();
 }

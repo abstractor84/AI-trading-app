@@ -215,7 +215,10 @@ class RiskEngine:
             passed = False
 
         # Gate 3: ATR Validity & Relative Volatility
-        if atr <= 0:
+        if entry_price <= 0:
+            reasons.append("❌ FAIL: Entry price is zero or invalid.")
+            passed = False
+        elif atr <= 0:
             reasons.append("❌ FAIL: ATR is zero — insufficient volatility data.")
             passed = False
         else:
@@ -246,7 +249,7 @@ class RiskEngine:
             passed = False
 
         # Gate 6: Entry price slippage/sanity
-        if current_price is not None:
+        if current_price is not None and entry_price > 0:
             drift = abs(current_price - entry_price) / entry_price * 100
             if drift > 0.5:  # Tightened from 1.0% to 0.5%
                 reasons.append(f"⚠️ SLIPPAGE: Entry ₹{entry_price:.2f} has drifted {drift:.2f}% from live ₹{current_price:.2f}.")

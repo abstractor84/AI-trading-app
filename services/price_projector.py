@@ -78,26 +78,35 @@ class PriceProjector:
 
         # How many candles to project
         if n_forecast is None:
-            # Use data's latest time to calculate remaining minutes, not system time
-            # because data might be historical or timezone-shifted
             last_idx = today_df.index[-1]
-            # Convert to IST if it's UTC
             if last_idx.tz is not None and str(last_idx.tz) == "UTC":
                 last_idx = last_idx.tz_convert('Asia/Kolkata')
             
             current_min = last_idx.hour * 60 + last_idx.minute
-            remaining_mins = self.MARKET_CLOSE_MIN - current_min
             
-            # SKEPTIC: Strict capping. Do not project past 15:30.
-            if remaining_mins <= 0:
-                n_forecast = 0 # No projection needed after market close
-            else:
-                n_forecast = remaining_mins // interval_minutes
+            # SKEPTIC: If it's past 15:00, we force the projection to start from 15:00 using data up to 15:00
+            # to keep the "3PM Projection" visible on the chart even after market close.
+            if current_min >= 15 * 60:
+                # Get data up to 15:00
+                cutoff_time = last_idx.replace(hour=15, minute=0, second=0, microsecond=0)
+                if last_idx.tz is not None:
+                    cutoff_time = cutoff_time.tz_convert('Asia/Kolkata')
+                    
+                pre_3pm_df = today_df[today_df.index <= cutoff_time]
+                if len(pre_3pm_df) >= 10:
+                    today_df = pre_3pm_df
+                    prices = today_df['Close'].values.astype(float)
+                    current_price = float(prices[-1])
+                    n_observed = len(prices)
+                    current_min = 15 * 60
+            
+            remaining_mins = self.MARKET_CLOSE_MIN - current_min
+            n_forecast = max(0, remaining_mins // interval_minutes)
                 
         # Calculate VWAP as gravity anchor
         vwap = self._compute_vwap(today_df)
 
-        # If no forecast needed (after hours), return empty projection
+        # If no forecast needed
         if n_forecast <= 0:
             return {
                 "ohlc": [{"time": idx.strftime("%Y-%m-%dT%H:%M:%S"), "open": round(float(row['Open']), 2), "high": round(float(row['High']), 2), "low": round(float(row['Low']), 2), "close": round(float(row['Close']), 2)} for idx, row in today_df.iterrows()],

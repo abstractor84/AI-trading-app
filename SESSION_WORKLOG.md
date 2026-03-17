@@ -41,3 +41,12 @@ Finalize production-grade stability, resolve persistent state and UI regressions
 - **Charting:** Extended `rightOffset` to 300 minutes (5 hours) to support scrolling far past market close as requested.
 - **Performance:** Optimized trade closing memory sync using index-based operations for state management.
 - **Cleanup:** Added `truncate_test_data` command to safely reset test history while preserving system settings.
+
+## 9. Resolution of High-Priority Bugs (Update 17)
+- **GIFT Nifty:** Handled Upstox API `UDAPI100060` error gracefully for `NSE_INDEX|GIFT Nifty`. Ensured it doesn't falsely fall back to NIFTY50 (`^NSEI`) when Upstox returns empty data. Also fixed the `_upstox_svc` name error in `stock_discovery.py`.
+- **Chart Scrolling:** Removed hardcoded `rightOffset` and replaced aggressive `setInterval` logical range locking with a one-time `setTimeout`. This allows completely fluid manual left/right scrolling past 15:30 Hrs.
+- **3 PM Projection:** Updated `price_projector.py` to dynamically lock the projection window between 15:00 and 15:30 when viewed after market hours, ensuring the math model wave is always visible.
+- **Close Position UX:** Fixed a severe string vs. integer type mismatch (`t.id !== tradeId`) in `app.js` and `ws_handler.py` that caused the frontend optimistic UI update to fail, leaving the position visible for minutes.
+- **AI Advisor Log Button:** Fixed `AttributeError` for `state.global_context` missing `vix` value that was silently crashing the `log_trade` websocket handler. Also fixed `handleAIAdvisorUpdate` to gracefully clear the HTML when `data` is null.
+- **Sentinel News Fix:** Fixed the `NameError: name 'timedelta' is not defined` inside the threaded DDGS fetcher by ensuring imports are available in the thread scope.
+- **Truncate Data:** Fixed the reset logic so `trades_update` and `ai_advisor` clear events properly refresh the frontend DOM elements.

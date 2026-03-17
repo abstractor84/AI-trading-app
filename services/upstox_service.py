@@ -99,7 +99,7 @@ class UpstoxService:
     caller (TechnicalAnalysisService) to fall back to yfinance.
     """
 
-    BASE_URL = "https://api.upstox.com/v2"
+    BASE_URL = "https://api.upstox.com/v3"
 
     def __init__(self):
         self.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
@@ -143,15 +143,11 @@ class UpstoxService:
         """Actively verify if the token is still valid with a lightweight API call."""
         if not self.is_authenticated:
             return False
-        url = f"{self.BASE_URL}/user/profile"
+        # Profile is still v2
+        url = "https://api.upstox.com/v2/user/profile"
         try:
-            # Note: user/profile might still be under v2 or v3, checking v3 first
             resp = requests.get(url, headers=self._headers(), timeout=5)
-            if resp.status_code == 200:
-                return True
-            # Fallback to v2 if v3 profile is not yet available
-            resp_v2 = requests.get("https://api.upstox.com/v2/user/profile", headers=self._headers(), timeout=5)
-            return resp_v2.status_code == 200
+            return resp.status_code == 200
         except Exception:
             return False
 
@@ -159,15 +155,11 @@ class UpstoxService:
         """Fetch user profile details to verify connection."""
         if not self.is_authenticated:
             return None
-        url = f"{self.BASE_URL}/user/profile"
+        url = "https://api.upstox.com/v2/user/profile"
         try:
             resp = requests.get(url, headers=self._headers(), timeout=5)
             if resp.status_code == 200:
                 return resp.json().get("data")
-            # Fallback to v2
-            resp_v2 = requests.get("https://api.upstox.com/v2/user/profile", headers=self._headers(), timeout=5)
-            if resp_v2.status_code == 200:
-                return resp_v2.json().get("data")
         except Exception:
             pass
         return None

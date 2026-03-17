@@ -83,8 +83,8 @@ class StockDiscoveryService:
                                     "change_pct": round(change_pct, 2)
                                 }
 
-                    # Fallback to yfinance
-                    if data is None:
+                    # If data is still None, use yfinance fallback. Except for GIFT Nifty.
+                    if data is None and ticker != "NSE_INDEX|GIFT Nifty":
                         if ticker not in cache:
                             t = yf.Ticker(ticker)
                             hist = t.history(period="5d", interval="1d")

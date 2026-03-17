@@ -232,6 +232,7 @@ class SentinelService:
         """Fetch news using DDGS with thread safety and safe field extraction."""
         try:
             def sync_fetch():
+                from datetime import datetime, timedelta
                 with _ddgs_lock:
                     with DDGS() as ddgs:
                         # Force (after:24h) in query and also filter locally

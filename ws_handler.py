@@ -213,7 +213,7 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 df = ta_svc.fetch_ohlcv(ticker, period="5d", interval="5m")
                 atr = risk_engine.compute_atr(df) if df is not None and not df.empty else 0
                 ta_data = ta_svc.analyze_stock(ticker) # Get technical indicators
-                vix_value = state.global_context.get("vix", {}).get("value", 0)
+                vix_value = (state.global_context or {}).get("vix", {}).get("value", 0)
 
                 # One-click trade: auto-use live price when entry_price is 0
                 current_price = float(df['Close'].iloc[-1]) if df is not None and not df.empty else 0
@@ -263,12 +263,12 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
 
             elif action == "close_trade":
                 exit_price = float(command['exit_price'])
-                trade_id = command['trade_id']
+                trade_id = str(command['trade_id'])
 
                 # Find the trade to record P&L for daily tracking
                 trade_pnl = 0
                 for t in state.open_trades:
-                    if t['id'] == trade_id:
+                    if str(t.get('id', '')) == trade_id:
                         if t['action'] == "BUY":
                             trade_pnl = (exit_price - t['entry_price']) * t['quantity']
                         else:
