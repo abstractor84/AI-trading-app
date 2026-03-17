@@ -161,7 +161,7 @@ class SentinelService:
                         "ticker": "POSITIONS" if q == pos_query else "MACRO",
                         "title": title,
                         "url": url,
-                        "sentiment": "Negative" if any(k in ["crash", "plunge", "sanctions", "war", "fraud"] for k in found_keywords) else "Bullish" if any(k in ["order", "win", "win", "surge"] for k in found_keywords) else "Neutral",
+                        "sentiment": "Bearish" if any(k in ["crash", "plunge", "sanctions", "war", "fraud"] for k in found_keywords) else "Bullish" if any(k in ["order", "win", "win", "surge"] for k in found_keywords) else "Neutral",
                         "time": "Just now"
                     }
                     all_news.append(headline)

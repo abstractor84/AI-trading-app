@@ -60,7 +60,6 @@ class TechnicalAnalysisService:
             
             return df
         df = None
-        # SKEPTIC: Always attempt Upstox for GIFT Nifty if authenticated, as mandate forbids proxies.
         
         if data_provider == "upstox" and _upstox_svc.is_authenticated:
             # Existing Upstox Logic
@@ -95,12 +94,7 @@ class TechnicalAnalysisService:
                 logger.error(f"Upstox data fetch failed for {ticker} and Fallback is DISABLED.")
                 return pd.DataFrame() # Return empty to trigger error in UI
 
-        # SKEPTIC: GIFT Nifty is best represented by the authentic Upstox key.
-        # Hallucinating ^NSEI as a proxy is strictly forbidden by mandate.
-        if "GIFT" in ticker.upper():
-            yf_ticker = "NSE_INDEX|GIFT Nifty" # Still tries yf download which will fail, triggering error. Good.
-        else:
-            yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
+        yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
         
         if df is None:
             try:
@@ -492,7 +486,7 @@ class TechnicalAnalysisService:
             "vwap": indicators.get("vwap") if indicators else current_price,
             "interval": interval,
             "projection": proj_res.get("projection"),
-            "proj_timestamps": [int(pd.to_datetime(t).timestamp()) for t in proj_res.get("timestamps", [])],
+            "proj_timestamps": proj_res.get("timestamps", []),
             "upper_band": proj_res.get("upper_band"),
             "lower_band": proj_res.get("lower_band")
         }

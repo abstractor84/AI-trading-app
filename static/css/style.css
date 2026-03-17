@@ -166,8 +166,8 @@ body {
     padding: 10px;
     border-radius: 4px;
 }
-.news-item.Bullish { border-left-color: var(--green); }
-.news-item.Bearish { border-left-color: var(--red); }
+.news-item.bullish { border-left-color: var(--green); }
+.news-item.bearish { border-left-color: var(--red); }
 .news-item .news-title { font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px; }
 .news-item .news-meta { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; }
 

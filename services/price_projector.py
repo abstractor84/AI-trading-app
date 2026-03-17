@@ -160,13 +160,13 @@ class PriceProjector:
         proj_timestamps = []
         for i in range(1, n_forecast + 1):
             t = last_time + timedelta(minutes=i * interval_minutes)
-            proj_timestamps.append(t.strftime("%Y-%m-%dT%H:%M:%S"))
+            proj_timestamps.append(int(t.timestamp()))
 
         # ─── Historical OHLC for chart ──────────────────────────
         ohlc_data = []
         for idx, row in today_df.iterrows():
             ohlc_data.append({
-                "time": idx.strftime("%Y-%m-%dT%H:%M:%S"),
+                "time": int(idx.timestamp()),
                 "open": round(float(row['Open']), 2),
                 "high": round(float(row['High']), 2),
                 "low": round(float(row['Low']), 2),

@@ -41,7 +41,6 @@ class StockDiscoveryService:
                 "DAX": "^GDAXI", "FTSE 100": "^FTSE", "NIKKEI": "^N225"
             },
             "INDIA": {
-                "GIFT Nifty": "NSE_INDEX|GIFT Nifty",
                 "NIFTY 50": "^NSEI",
                 "SENSEX": "^BSESN",
                 "BANK NIFTY": "^NSEBANK",                "FINNIFTY": "^CNXFIN",
@@ -83,8 +82,8 @@ class StockDiscoveryService:
                                     "change_pct": round(change_pct, 2)
                                 }
 
-                    # If data is still None, use yfinance fallback. Except for GIFT Nifty.
-                    if data is None and ticker != "NSE_INDEX|GIFT Nifty":
+                    # If data is still None, use yfinance fallback.
+                    if data is None:
                         if ticker not in cache:
                             t = yf.Ticker(ticker)
                             hist = t.history(period="5d", interval="1d")

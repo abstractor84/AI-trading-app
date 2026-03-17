@@ -50,3 +50,12 @@ Finalize production-grade stability, resolve persistent state and UI regressions
 - **AI Advisor Log Button:** Fixed `AttributeError` for `state.global_context` missing `vix` value that was silently crashing the `log_trade` websocket handler. Also fixed `handleAIAdvisorUpdate` to gracefully clear the HTML when `data` is null.
 - **Sentinel News Fix:** Fixed the `NameError: name 'timedelta' is not defined` inside the threaded DDGS fetcher by ensuring imports are available in the thread scope.
 - **Truncate Data:** Fixed the reset logic so `trades_update` and `ai_advisor` clear events properly refresh the frontend DOM elements.
+
+## 10. Stability Refinement & Mandate Compliance (Update 18)
+- **GIFT Nifty Removal:** Removed GIFT Nifty from discovery and TA layers as requested by the user to focus on a stable MVP. This eliminates persistent 404/UDAPI100060 errors in logs.
+- **Import Fix:** Resolved `ImportError: cannot import name 'ActionTimeline' from 'models'` in `ws_handler.py`.
+- **Method Fix:** Fixed `AttributeError: 'UpstoxService' object has no attribute 'get_instrument_key'` by correctly calling it as a standalone function.
+- **UI Signals:** Added `lz_score` to the technicals dictionary in scan results so the frontend "LZ AI" chip displays real-time signals correctly.
+- **Robust Timestamps:** Refactored `PriceProjector` to return integer epoch timestamps, ensuring the 3PM projection is rendered correctly regardless of server timezone.
+- **Ticking Simulation:** Enabled simulated price ticks automatically if `SIMULATION=true` is set, improving the out-of-the-box dev experience.
+- **Code Cleanup:** Removed redundant `restart()` method definitions in `upstox_streamer.py`.

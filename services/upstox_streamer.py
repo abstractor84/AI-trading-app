@@ -147,7 +147,8 @@ class UpstoxLiveStream:
 
     async def _run_simulation(self):
         """Simulates price ticks for the UI when real auth is unavailable."""
-        if os.getenv("ENABLE_SIMULATION", "false").lower() != "true":
+        enable_sim = os.getenv("ENABLE_SIMULATION", "false").lower() == "true" or os.getenv("SIMULATION", "false").lower() == "true"
+        if not enable_sim:
             logger.warning("Simulation is disabled by default. Set ENABLE_SIMULATION=true in .env to enable.")
             return
 
@@ -198,18 +199,6 @@ class UpstoxLiveStream:
         self.running = False
         if self.ws:
             asyncio.create_task(self.ws.close())
-
-    def restart(self):
-        """Force a restart of the stream (e.g. after token update)."""
-        logger.info("Restarting Upstox Live Stream...")
-        self.stop()
-        self.running = True
-
-    def restart(self):
-        """Force a restart of the stream (e.g. after token update)."""
-        logger.info("Restarting Upstox Live Stream...")
-        self.stop()
-        self.running = True
 
     def restart(self):
         """Force a restart of the stream (e.g. after token update)."""

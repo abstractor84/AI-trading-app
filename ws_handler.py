@@ -84,6 +84,11 @@ class ConnectionManager:
         except Exception as e:
             logger.error(f"SKEPTIC: send_state failed: {e}")
 
+    async def broadcast_state(self, state):
+        """Broadcast updated state to all connected clients."""
+        for conn in self.active_connections:
+            await self.send_state(conn, state)
+
 
 async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, state):
     """
@@ -502,9 +507,9 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                                 entry_price = float(cached.get("df")['Close'].iloc[-1])
                                 
                             try:
-                                from services.upstox_service import upstox_client
+                                from services.upstox_service import upstox_client, get_instrument_key
                                 if upstox_client and upstox_client.validate_token():
-                                    ikey = upstox_client.get_instrument_key(ticker)
+                                    ikey = get_instrument_key(ticker)
                                     if ikey:
                                         quote = upstox_client.fetch_market_quote(ikey)
                                         if quote and "data" in quote and ikey in quote["data"]:
@@ -539,6 +544,7 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                                     "bb_lower": _s(ta_data.get("bb_lower", 0), 2),
                                     "ema_9": _s(ta_data.get("ema_9", 0), 2),
                                     "ema_21": _s(ta_data.get("ema_21", 0), 2),
+                                    "lz_score": _s(cached.get("math_prob", 0), 2),
                                 },
                                 "lorentzian": {
                                     "score": _s(cached.get("math_prob", 0), 2),
@@ -665,19 +671,19 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
 
             elif action == "truncate_test_data":
                 from database import SessionLocal
-                from models import Trade, AIInteraction, DailySummary, ActionTimeline
+                from models import Trade, AIInteraction, DailySummary
                 
                 try:
                     with SessionLocal() as db:
                         db.query(Trade).delete()
                         db.query(AIInteraction).delete()
                         db.query(DailySummary).delete()
-                        db.query(ActionTimeline).delete()
+                        
                         # Clear in-memory state as well
-                        state.open_trades.clear()
-                        state.closed_trades.clear()
-                        state.ai_scans_today.clear()
-                        state.action_timeline.clear()
+                        state.open_trades = []
+                        state.closed_trades = []
+                        state.ai_scans_today = []
+                        state.action_timeline = []
                         state.ai_advisor_message = None
                         db.commit()
                         
@@ -686,7 +692,8 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                         "message": "🧹 Test data truncated successfully. State reset.",
                         "level": "success"
                     })
-                    await manager.send_state(websocket, state)
+                    # Send updated state to all clients to clear UI
+                    await manager.broadcast_state(state)
                 except Exception as e:
                     logger.error(f"Truncation failed: {e}")
                     await websocket.send_json({

@@ -60,13 +60,9 @@ def _load_instrument_cache() -> None:
                     _instrument_cache[f"{base}.NS"] = key
 
         logger.info(f"Upstox: Loaded {len(_instrument_cache)} NSE instruments.")
-        
-        # SKEPTIC: Manually inject GIFT Nifty which is often missing from public BOD list but available via API
-        _instrument_cache["GIFT NIFTY"] = "NSE_INDEX|GIFT Nifty"
-        _instrument_cache["GIFT NIFTY.NS"] = "NSE_INDEX|GIFT Nifty"
-        _reverse_instrument_cache["NSE_INDEX|GIFT Nifty"] = "GIFT NIFTY"
-        
+
         _last_cache_load = now
+
     except Exception as e:
         logger.error(f"Upstox: Failed to load instrument cache: {e}")
 
