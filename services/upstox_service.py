@@ -87,15 +87,13 @@ def get_symbol_from_key(instrument_key: str) -> str:
 
 class UpstoxService:
     """
-    V3 REST API Service for Upstox (2026 Edition)
+    REST API Service for Upstox (Hybrid V2/V3)
     --------------------------------------------
-    Provides methods for fetching OHLCV data and market quotes.
-    Handles automatic authentication checks and provides clean dataframes.
-    If credentials are missing or token is invalid, it fails gracefully allowing
-    caller (TechnicalAnalysisService) to fall back to yfinance.
+    Uses V3 for Historical data and V2 for Profiles and Quotes.
     """
 
-    BASE_URL = "https://api.upstox.com/v3"
+    BASE_URL = "https://api.upstox.com/v2"
+    V3_URL = "https://api.upstox.com/v3"
 
     def __init__(self):
         self.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")
@@ -203,7 +201,7 @@ class UpstoxService:
         num_interval = "".join(filter(str.isdigit, interval)) or "1"
         
         encoded_key = requests.utils.quote(instrument_key, safe='')
-        url = f"{self.BASE_URL}/historical-candle/intraday/{encoded_key}/{unit}/{num_interval}"
+        url = f"{self.V3_URL}/historical-candle/intraday/{encoded_key}/{unit}/{num_interval}"
         
         try:
             resp = requests.get(url, headers=self._headers(), timeout=8)
@@ -237,7 +235,7 @@ class UpstoxService:
         num_interval = "".join(filter(str.isdigit, interval)) or "1"
         encoded_key = requests.utils.quote(instrument_key, safe='')
         
-        url = f"{self.BASE_URL}/historical-candle/{encoded_key}/{unit}/{num_interval}/{to_date}/{from_date}"
+        url = f"{self.V3_URL}/historical-candle/{encoded_key}/{unit}/{num_interval}/{to_date}/{from_date}"
         logger.debug(f"SKEPTIC: Upstox Historical Call for {instrument_key}")
         
         try:
@@ -299,12 +297,12 @@ class UpstoxService:
         return combined
 
     def fetch_market_quote(self, instrument_key: str) -> dict | None:
-        """Fetch real-time snapshot quote using REST API (V3). Returns V2-compatible structure. Supports comma-separated keys."""
+        """Fetch real-time snapshot quote using REST API (Hybrid V2/V3). Returns V2-compatible structure. Supports comma-separated keys."""
         if not self.is_authenticated:
             return None
 
-        # SKEPTIC: We use the 'quotes' endpoint instead of 'ltp' to get 'close' price for change calculation
-        url = f"{self.BASE_URL}/market-quote/quotes?instrument_key={requests.utils.quote(instrument_key, safe='')}"
+        # SKEPTIC: Explicitly use V2 endpoint for quotes as V3 is currently unstable or restricted.
+        url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={requests.utils.quote(instrument_key, safe='')}"
         try:
             resp = requests.get(url, headers=self._headers(), timeout=5)
             if resp.status_code == 200:
@@ -326,6 +324,8 @@ class UpstoxService:
                         "data": normalized_data
                     }
             else:
+                if resp.status_code == 404:
+                    logger.error(f"SKEPTIC: 404 for keys: {instrument_key} | URL: {url}")
                 self._handle_api_error(resp, "market_quote")
         except Exception as e:
             logger.error(f"Upstox fetch_market_quote exception: {e}")

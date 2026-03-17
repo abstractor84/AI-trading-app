@@ -51,12 +51,16 @@ class ConnectionManager:
             phase_ctx = market_phase_svc.get_phase_context()
             
             from services.quota_service import quota_svc
+            from services.holiday_service import holiday_svc
             
             ai_prov = getattr(state, 'ai_provider', 'google')
             try:
                 quota_status = quota_svc.check_quota(ai_prov)
             except Exception as e:
                 quota_status = {"limit_rpd": 20, "remaining_rpd": 20}
+
+            is_h, h_name = holiday_svc.is_holiday()
+            upcoming = holiday_svc.get_upcoming_holiday()
 
             payload = {
                 "type": "state_update",
@@ -79,6 +83,11 @@ class ConnectionManager:
                 "fallback_ai": getattr(state, 'fallback_ai', True),
                 "ai_provider": getattr(state, 'ai_provider', 'google'),
                 "ai_model": getattr(state, 'ai_model', 'gemini-3.1-pro'),
+                "holiday_info": {
+                    "is_holiday": is_h,
+                    "holiday_name": h_name,
+                    "upcoming": upcoming
+                }
             }
             await websocket.send_json(payload)
         except Exception as e:

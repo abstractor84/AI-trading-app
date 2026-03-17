@@ -286,6 +286,19 @@
         </div>
     </div>
 
+    <!-- System Alert Modal -->
+    <div id="alert-modal" class="chart-modal" style="display:none; z-index: 10000;">
+        <div class="chart-modal-content" style="max-width:400px; text-align: center;">
+            <div class="chart-modal-header" style="justify-content: center;">
+                <h2 id="alert-title">📢 System Alert</h2>
+            </div>
+            <div class="chart-modal-body" style="padding: 20px;">
+                <p id="alert-message" style="font-size: 1.1rem; color: var(--text-primary);"></p>
+                <button class="btn primary" onclick="document.getElementById('alert-modal').style.display='none'" style="margin-top: 20px; width: 100%;">Understood</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Chart Modal -->
     <div id="chart-modal" class="chart-modal" style="display:none;">
         <div class="chart-modal-content" style="max-width:1200px;">

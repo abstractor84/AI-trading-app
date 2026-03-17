@@ -330,8 +330,8 @@ function initChartInstance(container, adxContainer) {
             vertLines: { color: 'rgba(139,148,158,0.06)' },
             horzLines: { color: 'rgba(139,148,158,0.06)' }
         },
-        crosshair: { 
-            mode: 1, 
+        crosshair: {
+            mode: 1,
             vertLine: { labelVisible: true, color: 'rgba(139,148,158,0.5)', style: 2 },
             horzLine: { labelVisible: true, color: 'rgba(139,148,158,0.5)', style: 2 }
         },
@@ -340,6 +340,7 @@ function initChartInstance(container, adxContainer) {
             borderColor: 'rgba(139,148,158,0.2)',
             timeVisible: true,
             secondsVisible: false,
+            rightOffset: 50, // 35% right margin (approx 50 bars)
             barSpacing: 6,
             shiftVisibleRangeOnNewBar: false, // MANDATORY: Prevent chart from jumping to latest bar on new tick
             lockVisibleTimeRangeOnResize: true
@@ -347,6 +348,7 @@ function initChartInstance(container, adxContainer) {
     };
 
     appState.chartInstance = LightweightCharts.createChart(container, chartOptions);
+
     appState.series.candles = appState.chartInstance.addCandlestickSeries({
         upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
         wickUpColor: '#22c55e', wickDownColor: '#ef4444',
@@ -1043,7 +1045,7 @@ function renderTimeline() {
 function renderHistoryScans(scans) {
     const container = document.getElementById('history-scans-container');
     if (!container) return;
-    
+
     if (!scans || scans.length === 0) {
         container.innerHTML = '<div class="empty-state">No AI scans found for the selected period.</div>';
         return;
@@ -1051,7 +1053,9 @@ function renderHistoryScans(scans) {
 
     let html = '';
     scans.forEach(scan => {
-        const time = new Date(scan.timestamp).toLocaleString('en-IN');
+        const timeStr = new Date(scan.timestamp).toLocaleString('en-IN', {
+            day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+        });
         let resultArr = [];
         try {
             resultArr = typeof scan.output_json === 'string' ? JSON.parse(scan.output_json) : scan.output_json;
@@ -1060,30 +1064,40 @@ function renderHistoryScans(scans) {
         if (!Array.isArray(resultArr)) resultArr = [];
 
         html += `
-            <div class="history-scan-card">
+            <div class="history-scan-card glass-panel">
                 <div class="hsc-header">
-                    <span>🕒 ${time}</span>
-                    <span class="hsc-model">${scan.model_used || 'AI'}</span>
-                </div>`;
-        
+                    <span class="hsc-time">🕒 ${timeStr}</span>
+                    <span class="hsc-model-badge">${scan.model_used || 'AI'}</span>
+                </div>
+                <div class="hsc-results-grid">`;
+
         if (resultArr.length === 0) {
-            html += `<p class="hsc-empty">No actionable setups found during this scan.</p>`;
+            html += `<div class="hsc-empty">No candidates identified in this scan cycle.</div>`;
         } else {
             resultArr.forEach(r => {
-                const cls = (r.action || '').toUpperCase() === 'BUY' ? 'buy' : 'short';
+                const action = (r.action || '').toUpperCase();
+                const cls = action === 'BUY' ? 'buy' : 'short';
+                const ticker = (r.ticker || '').replace('.NS','');
+                const fullTicker = (r.ticker || '').endsWith('.NS') ? r.ticker : `${r.ticker}.NS`;
+                const conf = r.confidence || 0;
+
                 html += `
-                    <div class="hsc-item" onclick="openChart('${r.ticker}')">
-                        <strong>${(r.ticker || '').replace('.NS','')}</strong>
-                        <span class="badge-${cls}">${r.action}</span>
-                        <span>Confidence: ${r.confidence || 0}%</span>
+                    <div class="hsc-item card-${cls}" onclick="openChart('${fullTicker}')">
+                        <div class="hsc-item-top">
+                            <span class="hsc-ticker">${ticker}</span>
+                            <span class="hsc-badge badge-${cls}">${action}</span>
+                        </div>
+                        <div class="hsc-item-bottom">
+                            <span class="hsc-conf-label">Confidence</span>
+                            <span class="hsc-conf-val">${conf}%</span>
+                        </div>
                     </div>`;
             });
         }
-        html += `</div>`;
+        html += `</div></div>`;
     });
     container.innerHTML = html;
 }
-
 /**
  * Renders today's scans into the discovery column.
  */
@@ -1103,19 +1117,28 @@ function renderIntradayAIHistory() {
         if (results.length === 0) return;
 
         html += `
-            <div class="intraday-scan-group">
-                <div class="isg-header"><span>Scan @ ${time}</span><span>${results.length} Candidates</span></div>`;
+            <div class="intraday-scan-card glass-panel">
+                <div class="isc-header">
+                    <span class="isc-time">🕒 ${time}</span>
+                    <span class="isc-count">${results.length} Picks</span>
+                </div>
+                <div class="isc-grid">`;
+        
         results.forEach(r => {
-            const cls = (r.action || '').toUpperCase() === 'BUY' ? 'buy' : 'short';
+            const action = (r.action || '').toUpperCase();
+            const cls = action === 'BUY' ? 'buy' : 'short';
+            const ticker = (r.ticker || '').replace('.NS','');
+            const fullTicker = (r.ticker || '').endsWith('.NS') ? r.ticker : `${r.ticker}.NS`;
             const conf = r.confidence !== undefined ? r.confidence : '--';
+            
             html += `
-                <div class="isg-row" onclick="openChart('${r.ticker}')">
-                    <span class="isg-ticker">${(r.ticker || '').replace('.NS','')}</span>
-                    <span class="badge-${cls}">${r.action}</span>
-                    <span class="isg-conf">${conf}%</span>
+                <div class="isc-item item-${cls}" onclick="openChart('${fullTicker}')">
+                    <span class="isc-ticker">${ticker}</span>
+                    <span class="isc-badge badge-${cls}">${action}</span>
+                    <span class="isc-conf">${conf}%</span>
                 </div>`;
         });
-        html += `</div>`;
+        html += `</div></div>`;
     });
     container.innerHTML = html;
 }
@@ -1269,7 +1292,12 @@ function handleAIAdvisorUpdate(data) {
         body.innerHTML = html;
     } else if (result && typeof result === 'object') {
         // Handle position review or exit guidance
-        body.innerHTML = `<div class="ai-guidance-box">${result.message || result.reasoning || 'Reviewing open positions for risk...'}</div>`;
+        const msg = result.message || result.reasoning || 'Reviewing open positions for risk...';
+        body.innerHTML = `
+            <div class="ai-guidance-card glass-panel">
+                <div class="agc-header">💡 AI Strategy Insight</div>
+                <div class="agc-body">${msg}</div>
+            </div>`;
     }
 }
 
@@ -1328,6 +1356,31 @@ function handleStateUpdate(msg) {
     if (msg.ai_scans_today) {
         appState.aiScansToday = msg.ai_scans_today;
         renderIntradayAIHistory();
+    }
+
+    // 6. Holiday Alerts
+    if (msg.holiday_info) {
+        const info = msg.holiday_info;
+        if (info.is_holiday) {
+            showAlert("Market Closed", `Today is ${info.holiday_name || 'a holiday'}. Markets are closed.`);
+        } else if (info.upcoming) {
+            showAlert("Upcoming Holiday", `Reminder: Markets will be closed on ${info.upcoming.date} for ${info.upcoming.name} (${info.upcoming.days_away} days away).`);
+        }
+    }
+    }
+
+    /**
+    * Shows a system-wide alert modal.
+    */
+    function showAlert(title, message) {
+    const modal = document.getElementById('alert-modal');
+    const titleEl = document.getElementById('alert-title');
+    const msgEl = document.getElementById('alert-message');
+    if (modal && titleEl && msgEl) {
+        titleEl.textContent = title;
+        msgEl.textContent = message;
+        modal.style.display = 'flex';
+    }
     }
 
     // 3. Risk & Settings (Requirement 4: Strict Checks)

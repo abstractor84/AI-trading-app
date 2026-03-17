@@ -178,16 +178,118 @@
     font-family: 'JetBrains Mono', monospace;
 }
 
-/* Chart Watermark */
-.chart-watermark {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 6rem;
-    font-weight: 900;
-    color: rgba(255, 255, 255, 0.02);
-    pointer-events: none;
-    z-index: 0;
-    user-select: none;
+/* History Scan Cards */
+.history-scan-card {
+    margin-bottom: 20px;
+    padding: 15px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.hsc-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.hsc-model-badge {
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--primary);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+
+.hsc-results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.hsc-item {
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 8px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.hsc-item:hover { background: rgba(255, 255, 255, 0.05); }
+.hsc-item.card-buy { border-left-color: var(--green); }
+.hsc-item.card-short { border-left-color: var(--red); }
+
+.hsc-item-top {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.hsc-ticker { font-weight: 800; font-size: 1rem; }
+.hsc-badge { font-size: 0.7rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
+
+.hsc-item-bottom {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Intraday Scan Feed */
+.intraday-scan-card {
+    margin-bottom: 12px;
+    padding: 12px;
+}
+
+.isc-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+}
+
+.isc-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.isc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.isc-item:hover { border-color: rgba(99, 102, 241, 0.3); }
+.isc-ticker { font-weight: 700; font-size: 0.85rem; }
+.isc-badge { font-size: 0.65rem; }
+.isc-conf { font-size: 0.75rem; color: var(--primary); font-weight: 600; }
+
+/* AI Guidance Card */
+.ai-guidance-card {
+    padding: 20px;
+    margin-bottom: 15px;
+    border-left: 4px solid var(--primary);
+}
+
+.agc-header {
+    font-weight: 800;
+    color: var(--primary);
+    font-size: 0.9rem;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.agc-body {
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
 }
