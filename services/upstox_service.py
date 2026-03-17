@@ -99,7 +99,7 @@ class UpstoxService:
     caller (TechnicalAnalysisService) to fall back to yfinance.
     """
 
-    BASE_URL = "https://api.upstox.com/v3"
+    BASE_URL = "https://api.upstox.com/v2"
 
     def __init__(self):
         self.access_token = os.getenv("UPSTOX_ACCESS_TOKEN")

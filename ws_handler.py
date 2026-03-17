@@ -507,10 +507,10 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                                     ikey = upstox_client.get_instrument_key(ticker)
                                     if ikey:
                                         quote = upstox_client.fetch_market_quote(ikey)
-                                        if quote and quote.get("ltp"):
-                                            entry_price = float(quote.get("ltp"))
+                                        if quote and "data" in quote and ikey in quote["data"]:
+                                            entry_price = float(quote["data"][ikey].get("last_price", entry_price))
                             except Exception as e:
-                                logger.warning(f"Failed to fetch live quote for {ticker}: {e}")
+                                logger.warning(f"SKEPTIC: Failed to fetch live quote for {ticker}: {e}")
                                 
                             # Fallback if Upstox quote is unavailable
                             if entry_price == 0 and not cached.get("df").empty:
@@ -661,6 +661,38 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     await manager.broadcast({
                         "type": "backtest_results",
                         "data": {"error": str(e)}
+                    })
+
+            elif action == "truncate_test_data":
+                from database import SessionLocal
+                from models import Trade, AIInteraction, DailySummary, ActionTimeline
+                
+                try:
+                    with SessionLocal() as db:
+                        db.query(Trade).delete()
+                        db.query(AIInteraction).delete()
+                        db.query(DailySummary).delete()
+                        db.query(ActionTimeline).delete()
+                        # Clear in-memory state as well
+                        state.open_trades.clear()
+                        state.closed_trades.clear()
+                        state.ai_scans_today.clear()
+                        state.action_timeline.clear()
+                        state.ai_advisor_message = None
+                        db.commit()
+                        
+                    await manager.broadcast({
+                        "type": "notification",
+                        "message": "🧹 Test data truncated successfully. State reset.",
+                        "level": "success"
+                    })
+                    await manager.send_state(websocket, state)
+                except Exception as e:
+                    logger.error(f"Truncation failed: {e}")
+                    await websocket.send_json({
+                        "type": "notification",
+                        "message": "⚠️ Truncation failed.",
+                        "level": "error"
                     })
 
             elif action == "get_chart_data":

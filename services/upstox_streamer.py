@@ -33,6 +33,10 @@ class UpstoxLiveStream:
         self.ws = None
         self.running = True
         self.subscribed_keys = set()
+
+    def set_callback(self, callback):
+        """Update the callback (e.g. if the connection manager changes)."""
+        self.callback = callback
         
     def _get_authorized_ws_url(self):
         """Fetches the authorized WebSocket URL from Upstox REST API (V3)."""
@@ -58,7 +62,7 @@ class UpstoxLiveStream:
         for key in instrument_keys:
             self.subscribed_keys.add(key)
             
-        if self.ws and not self.ws.closed:
+        if self.ws and self.ws.open:
             asyncio.create_task(self._send_subscription_request(instrument_keys))
             
     async def _send_subscription_request(self, keys):
@@ -224,4 +228,8 @@ def get_streamer(callback=None):
                 logging.debug(f"Tick received (no handler): {tick}")
             callback = default_cb
         upstox_streamer = UpstoxLiveStream(callback)
+    elif callback:
+        # Update callback if a new one is provided (e.g. from new ws manager)
+        upstox_streamer.set_callback(callback)
+        
     return upstox_streamer

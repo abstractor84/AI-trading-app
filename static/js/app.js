@@ -340,8 +340,10 @@ function initChartInstance(container, adxContainer) {
             borderColor: 'rgba(139,148,158,0.2)',
             timeVisible: true,
             secondsVisible: false,
-            rightOffset: 50, // SKEPTIC: Increased for scrolling beyond current candle
-            barSpacing: 6
+            rightOffset: 300, // SKEPTIC: Increased to 5h (300 mins) to allow scrolling far past 15:30 close
+            barSpacing: 6,
+            shiftVisibleRangeOnNewBar: false, // MANDATORY: Prevent chart from jumping to latest bar on new tick if user is scrolling past 15:30
+            lockVisibleTimeRangeOnResize: true
         }
     };
 
@@ -719,12 +721,15 @@ function renderChart(data) {
         if (!appState.series.projLine) {
             appState.series.projLine = appState.chartInstance.addLineSeries({ 
                 color: '#6366f1', lineWidth: 2, lineStyle: 2, title: '',
-                autoscaleInfoProvider: () => null,
+                autoscaleInfoProvider: () => ({
+                    priceRange: { min: Math.min(...data.projection), max: Math.max(...data.projection) },
+                    margins: { above: 10, below: 10 }
+                }),
                 lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false
             });
         }
         appState.series.projLine.setData(proj);
-        appState.series.projLine.applyOptions({ visible: true, lastValueVisible: false, priceLineVisible: false, axisLabelVisible: false });
+        appState.series.projLine.applyOptions({ visible: true });
 
         if (data.upper_band) {
             const upper = data.proj_timestamps.map((t, i) => ({ time: Number(t) + 19800, value: parseFloat(data.upper_band[i]) })).sort((a, b) => a.time - b.time);
@@ -806,7 +811,7 @@ function renderChart(data) {
             console.log(`SKEPTIC: Focusing today from 9:15 AM IST`);
             appState.chartInstance.timeScale().setVisibleRange({
                 from: ist915,
-                to: lastTime + (60 * 30) // 30 mins buffer for projection
+                to: lastTime + (60 * 300) // 5 hours buffer for projections and scrolling mandate
             });
         } else {
             appState.chartInstance.timeScale().fitContent();
@@ -1133,45 +1138,61 @@ function handleBacktestResults(results) {
 
     const container = document.getElementById('backtest-results-container');
     if (!container) return;
-    
+
     if (results.error) {
         container.innerHTML = `<div class="error-msg">⚠️ Backtest failed: ${results.error}</div>`;
         return;
     }
-    
+
     const pnlClass = results.net_profit >= 0 ? 'positive' : 'negative';
-    
+
     container.innerHTML = `
-        <div class="bt-summary-card">
-            <div class="bt-stat"><label>Total Trades</label><strong>${results.total_trades}</strong></div>
-            <div class="bt-stat"><label>Win Rate</label><strong>${results.win_rate}%</strong></div>
-            <div class="bt-stat"><label>Net Profit</label><strong class="${pnlClass}">₹${results.net_profit.toLocaleString()}</strong></div>
-            <div class="bt-stat"><label>Max Drawdown</label><strong>${results.max_drawdown_pct}%</strong></div>
-        </div>
-        <div class="bt-log-section">
-            <h3>📝 Strategy Execution Log</h3>
-            <div class="bt-log-wrapper">
-                <table class="history-table">
-                    <thead>
-                        <tr><th>Type</th><th>Entry</th><th>Exit</th><th>P&L %</th></tr>
-                    </thead>
-                    <tbody>
-                        ${(results.trade_log || []).slice(0, 50).map(t => `
-                            <tr>
-                                <td>${t.type}</td>
-                                <td>₹${t.entry_price.toFixed(2)}</td>
-                                <td>₹${t.exit_price.toFixed(2)}</td>
-                                <td class="${t.pnl_pct >= 0 ? 'positive' : 'negative'}">${(t.pnl_pct * 100).toFixed(2)}%</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
+        <div class="bt-results-grid">
+            <div class="bt-summary-glass glass-panel">
+                <h3 style="margin-top:0; color:var(--primary)">📊 Result Summary</h3>
+                <div class="bt-stat-card">
+                    <label>Net Profit</label>
+                    <strong class="${pnlClass}">₹${results.net_profit.toLocaleString()}</strong>
+                </div>
+                <div class="bt-stat-card">
+                    <label>Win Rate</label>
+                    <strong>${results.win_rate}%</strong>
+                </div>
+                <div class="bt-stat-card">
+                    <label>Total Trades</label>
+                    <strong>${results.total_trades}</strong>
+                </div>
+                <div class="bt-stat-card">
+                    <label>Max Drawdown</label>
+                    <strong style="color:#f87171">${results.max_drawdown_pct}%</strong>
+                </div>
             </div>
-            ${results.trade_log?.length > 50 ? `<p class="bt-note">...showing first 50 of ${results.trade_log.length} trades</p>` : ''}
+
+            <div class="bt-log-panel glass-panel">
+                <h3 style="margin:20px 25px 10px; color:var(--primary)">📝 Strategy Execution Log</h3>
+                <div class="bt-log-scroll" style="padding: 0 25px 25px;">
+                    <table class="history-table">
+                        <thead style="position:sticky; top:0; background: #1a2234; z-index:2">
+                            <tr><th>Type</th><th>Entry</th><th>Exit</th><th>P&L %</th></tr>
+                        </thead>
+                        <tbody>
+                            ${(results.trade_log || []).map(t => `
+                                <tr>
+                                    <td><span class="badge-${t.type.includes('BUY') ? 'buy' : 'short'}">${t.type}</span></td>
+                                    <td>₹${t.entry_price.toFixed(2)}</td>
+                                    <td>₹${t.exit_price.toFixed(2)}</td>
+                                    <td class="${t.pnl_pct >= 0 ? 'positive' : 'negative'}">
+                                        <b>${(t.pnl_pct * 100).toFixed(2)}%</b>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     `;
 }
-
 /**
  * Renders new AI Advisor results (Rich Stock Cards).
  */
@@ -1243,7 +1264,7 @@ function handleAIAdvisorUpdate(data) {
                     </div>
 
                     <div class="sc-actions">
-                        <button class="btn primary sm" onclick="logQuickTrade('${fullTicker}', '${r.action}', ${r.live_price})">📝 Log</button>
+                        <button class="btn primary sm" onclick="quickLogFromScan('${fullTicker}', '${r.action}')">📝 Log</button>
                         <button class="btn secondary sm" onclick="openChart('${fullTicker}')">📈 Chart</button>
                     </div>
                 </div>`;
@@ -1384,9 +1405,14 @@ function handleStateUpdate(msg) {
 function handleLiveTick(tick) {
     if (!tick) return;
     
+    // SKEPTIC: Map Upstox 'key' to our internal ticker representation
+    const tickKey = tick.key || tick.symbol || "";
+    const cleanKey = tickKey.replace("NSE_EQ|", "").replace("NSE_INDEX|", "");
+    const tickerWithNS = cleanKey.endsWith(".NS") ? cleanKey : (cleanKey + ".NS");
+    
     // 1. Update matching open trades
     appState.openTrades.forEach(t => {
-        if (t.ticker === tick.symbol || t.ticker === (tick.symbol + '.NS')) {
+        if (t.ticker === tickerWithNS || t.ticker === cleanKey) {
             t.current_price = tick.ltp;
             // Recalculate P&L
             if (t.action === 'BUY') {
@@ -1403,15 +1429,19 @@ function handleLiveTick(tick) {
     renderTradeHistory();
 
     // 3. Update active chart if it matches
-    if (appState.currentChartKey === tick.symbol || appState.currentChartKey === (tick.symbol + '.NS')) {
+    if (appState.currentChartKey === tickerWithNS || appState.currentChartKey === cleanKey) {
         if (appState.series.candles) {
+            const tickTime = (tick.ltt ? Math.floor(tick.ltt / 1000) : Math.floor(Date.now() / 1000)) + 19800;
             appState.series.candles.update({
-                time: (tick.timestamp || Math.floor(Date.now() / 1000)) + 19800,
-                open: tick.open || tick.ltp,
-                high: tick.high || tick.ltp,
-                low: tick.low || tick.ltp,
+                time: tickTime,
+                open: tick.ltp,
+                high: tick.ltp,
+                low: tick.ltp,
                 close: tick.ltp
             });
+            // Update Legend LTP
+            const ltpEl = document.getElementById('legend-ltp');
+            if (ltpEl) ltpEl.textContent = `LTP: ₹${tick.ltp.toFixed(2)}`;
         }
     }
 }
@@ -1432,6 +1462,13 @@ ws.onmessage = (event) => {
             case "state_update":
                 handleStateUpdate(msg);
                 break;
+            case "trades_update":
+                appState.openTrades = msg.open_trades || [];
+                appState.closedTrades = msg.closed_trades || [];
+                renderPositions();
+                updateDaySummary();
+                renderTradeHistory();
+                break;
             case "chart_data":
                 renderChart(msg.data);
                 break;
@@ -1445,24 +1482,44 @@ ws.onmessage = (event) => {
                 renderHistoryScans(msg.data);
                 break;
             case "trade_history_90d":
-                // Handle 90-day history if implemented in history page
-                const histBody = document.getElementById('history-body');
-                if (histBody) {
-                    histBody.innerHTML = (msg.data || []).map(t => {
-                        const cleanTicker = (t.ticker || '').replace('.NS', '');
-                        const fullTicker = (t.ticker || '').endsWith('.NS') ? t.ticker : `${t.ticker}.NS`;
-                        return `
-                        <tr class="history-row">
-                            <td class="hist-date">${t.close_time}</td>
-                            <td><span class="hist-ticker aih-ticker" onclick="openChart('${fullTicker}')" style="cursor: pointer; text-decoration: underline; color: var(--primary);">${cleanTicker}</span></td>
-                            <td><span class="badge-${(t.action || '').toUpperCase() === 'BUY' ? 'buy' : 'short'}">${t.action}</span></td>
-                            <td>${t.quantity}</td>
-                            <td>₹${fmt(t.entry_price)}</td>
-                            <td>₹${fmt(t.exit_price)}</td>
-                            <td class="${t.pnl >= 0 ? 'positive' : 'negative'}">₹${fmt(t.pnl)}</td>
-                        </tr>`;
-                    }).join('');
+                const historyContainer = document.getElementById('history-body');
+                if (!historyContainer) return;
+                
+                if (!msg.data || msg.data.length === 0) {
+                    historyContainer.innerHTML = '<div class="empty-state">No trade history found for the last 90 days.</div>';
+                    return;
                 }
+
+                historyContainer.innerHTML = `
+                    <div class="history-grid">
+                        ${msg.data.map(t => {
+                            const pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
+                            const fullTicker = t.ticker.endsWith('.NS') ? t.ticker : `${t.ticker}.NS`;
+                            const cleanTicker = t.ticker.replace('.NS', '');
+                            return `
+                                <div class="history-card glass-panel">
+                                    <div class="hc-header">
+                                        <span class="hc-ticker">${cleanTicker}</span>
+                                        <span class="hc-date">${t.close_time}</span>
+                                    </div>
+                                    <div class="hc-body">
+                                        <div class="hc-stat"><label>Action</label><span class="badge-${t.action === 'BUY' ? 'buy' : 'short'}">${t.action}</span></div>
+                                        <div class="hc-stat"><label>Qty</label><span>${t.quantity}</span></div>
+                                        <div class="hc-stat"><label>Entry</label><span>₹${t.entry_price.toFixed(2)}</span></div>
+                                        <div class="hc-stat"><label>Exit</label><span>₹${t.exit_price.toFixed(2)}</span></div>
+                                        <div class="hc-pnl ${pnlClass}">
+                                            <small>Profit/Loss</small><br>
+                                            ₹${t.pnl.toFixed(2)}
+                                        </div>
+                                    </div>
+                                    <div style="margin-top:15px; text-align:right">
+                                        <button class="btn secondary sm" onclick="openChart('${fullTicker}')">📈 View Chart</button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                `;
                 break;
             case "scan_results":
                 handleAIAdvisorUpdate({ result: msg.data, timestamp: new Date().toLocaleTimeString('en-IN') });
@@ -1661,7 +1718,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 60000);
     });
 
-    // 4. Quick Log Trade
+    // 5. Truncate Data
+    document.getElementById('truncate-data-btn')?.addEventListener('click', () => {
+        if (confirm("⚠️ CRITICAL: This will PERMANENTLY DELETE all trade history, AI scans, and timeline events. System settings will be preserved. Proceed?")) {
+            ws.send(JSON.stringify({ action: "truncate_test_data" }));
+        }
+    });
+
+    // 6. Quick Log Trade
     document.getElementById('qt-submit')?.addEventListener('click', () => {
         const ticker = document.getElementById('qt-ticker').value.trim().toUpperCase();
         const entry = document.getElementById('qt-entry').value;
@@ -1743,6 +1807,10 @@ function closeTrade(tradeId, exitPrice) {
         trade_id: tradeId,
         exit_price: parseFloat(exitPrice)
     }));
+    // SKEPTIC: Immediate UI cleanup for better UX (backend will confirm via trades_update)
+    appState.openTrades = appState.openTrades.filter(t => t.id !== tradeId);
+    renderPositions();
+    updateDaySummary();
 }
 
 /**

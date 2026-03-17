@@ -42,7 +42,7 @@ After **every** code change, fix, or feature implementation, a comprehensive Ske
     - Time parsing must use `Number()` or `+` to prevent string concatenation in epoch calculations.
 - **Market Data Ordering:** 
     - **Global Row:** USD/INR, Brent Crude, WTI Crude, Gold, Silver must remain sticky in the leftmost positions (Index 0-4).
-    - **India Row:** GIFT Nifty (using `^NSEI` proxy) must be prioritized.
+    - **India Row:** GIFT Nifty (using Upstox `NSE_INDEX|GIFT Nifty`) must be prioritized. Hallucinating `^NSEI` as a proxy is strictly forbidden.
 - **State Persistence:** "Close Position" actions must finalize DB commits before broadcasting `trades_update`. State filtering must use strict string comparison for IDs.
 
 ## 6. Testing Requirements

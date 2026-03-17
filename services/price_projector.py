@@ -39,8 +39,8 @@ class PriceProjector:
 
     # NSE market hours in minutes from midnight
     MARKET_OPEN_MIN = 9 * 60 + 15   # 9:15 AM
-    MARKET_CLOSE_MIN = 15 * 60       # 3:00 PM
-    TOTAL_TRADING_MINS = MARKET_CLOSE_MIN - MARKET_OPEN_MIN  # 345 minutes
+    MARKET_CLOSE_MIN = 15 * 60 + 30  # 3:30 PM (Mandate: 15:30)
+    TOTAL_TRADING_MINS = MARKET_CLOSE_MIN - MARKET_OPEN_MIN  # 375 minutes
 
     def generate_projection(self, df: pd.DataFrame, interval_minutes: int = 1, n_forecast: int = None) -> dict:
         """

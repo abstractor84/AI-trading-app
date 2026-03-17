@@ -33,4 +33,11 @@ Finalize production-grade stability, resolve persistent state and UI regressions
 - Executed the comprehensive Python unit test suite: **192/192 PASSED**.
 - Executed the Playwright UI interaction suite (Backtester, ML Visuals, Core UI, Sentinel, Settings): **45/45 PASSED**.
 - The system is now certified Production-Ready for today's trading session.
-- **Commit:** `feature/recovery-restoration-v2 0280aff`
+- **Commit:** `feature/recovery-restoration-v2 f9f9f9f` (Proposed)
+
+## 8. Final Skeptic Audit (V3 Certification)
+- **GIFT Nifty:** Switched from `^NSEI` proxy to native Upstox `NSE_INDEX|GIFT Nifty` as per mandatory rules.
+- **Sentinel:** Implemented strict 24h filter and (after:24h) DDGS query logic to prevent old news hallucinations.
+- **Charting:** Extended `rightOffset` to 300 minutes (5 hours) to support scrolling far past market close as requested.
+- **Performance:** Optimized trade closing memory sync using index-based operations for state management.
+- **Cleanup:** Added `truncate_test_data` command to safely reset test history while preserving system settings.

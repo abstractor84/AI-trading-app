@@ -12,12 +12,12 @@ _NIFTY100_SYMBOLS = [
     "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "BHARTIARTL",
     "INFY", "SBIN", "LICI", "ITC", "HINDUNILVR",
     "LT", "BAJFINANCE", "HCLTECH", "MARUTI", "SUNPHARMA",
-    "ADANIENT", "KOTAKBANK", "TITAN", "ONGC", "TATAMOTORS",
+    "ADANIENT", "KOTAKBANK", "TITAN", "ONGC", "TMPV",
     "NTPC", "AXISBANK", "ADANIPORTS", "ASIANPAINT", "COALINDIA",
     "BAJAJHLDNG", "BAJAJ-AUTO", "BHEL", "JSWSTEEL", "ADANIPOWER",
     "M&M", "TRENT", "BEL", "ULTRACEMCO", "SIEMENS",
     "GRASIM", "SBILIFE", "BPCL", "NESTLEIND", "HAL",
-    "ZOMATO", "PNB", "IOB", "CANBK", "INDHOTEL",
+    "ETERNAL", "PNB", "IOB", "CANBK", "INDHOTEL",
     "DLF", "EICHERMOT", "HINDALCO", "DIVISLAB", "CIPLA",
     "BRITANNIA", "TATASTEEL", "ADANIENSOL"
 ]
@@ -32,20 +32,19 @@ class StockDiscoveryService:
         """Fetches the latest prices and formats them into categorized HTML rows."""
         symbols = {
             "GLOBAL": {
-                "USD/INR": "INR=X", 
-                "WTI Crude": "CL=F", 
-                "Brent Crude": "BZ=F", 
-                "Gold": "GC=F", 
+                "USD/INR": "INR=X",
+                "WTI Crude": "CL=F",
+                "Brent Crude": "BZ=F", # Near-month futures
+                "Gold": "GC=F",
                 "Silver": "SI=F",
                 "S&P 500": "^GSPC", "NASDAQ": "^IXIC", "DOW 30": "^DJI",
                 "DAX": "^GDAXI", "FTSE 100": "^FTSE", "NIKKEI": "^N225"
             },
             "INDIA": {
-                "GIFT Nifty": "^NSEI", 
-                "NIFTY 50": "^NSEI", 
-                "SENSEX": "^BSESN", 
-                "BANK NIFTY": "^NSEBANK", 
-                "FINNIFTY": "^CNXFIN",
+                "GIFT Nifty": "NSE_INDEX|GIFT Nifty",
+                "NIFTY 50": "^NSEI",
+                "SENSEX": "^BSESN",
+                "BANK NIFTY": "^NSEBANK",                "FINNIFTY": "^CNXFIN",
                 "NIFTY MIDCAP 100": "^CRSLDX", 
                 "NIFTY SMALLCAP 100": "^CNXSC",
                 "NIFTY IT": "^CNXIT",
@@ -66,7 +65,25 @@ class StockDiscoveryService:
             for name, ticker in ticker_map.items():
                 try:
                     data = None
-                    # SKEPTIC: Use ^NSEI proxy for GIFT Nifty as per MANDATE (yfinance fallback)
+                    # Use Upstox for GIFT Nifty if authenticated
+                    if "NSE_INDEX" in ticker:
+                        from services.upstox_service import upstox_client
+                        if upstox_client.is_authenticated:
+                            q = upstox_client.fetch_market_quote(ticker)
+                            if q and 'data' in q and ticker in q['data']:
+                                item = q['data'][ticker]
+                                current = item.get('last_price', 0)
+                                prev = item.get('close_price', 0)
+                                change = current - prev if prev != 0 else 0
+                                change_pct = (change / prev * 100) if prev != 0 else 0
+                                data = {
+                                    "name": name,
+                                    "value": round(current, 2),
+                                    "change": round(change, 2),
+                                    "change_pct": round(change_pct, 2)
+                                }
+
+                    # Fallback to yfinance
                     if data is None:
                         if ticker not in cache:
                             t = yf.Ticker(ticker)

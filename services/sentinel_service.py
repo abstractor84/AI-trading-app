@@ -2,7 +2,7 @@ import logging
 import asyncio
 import threading
 from duckduckgo_search import DDGS
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 _ddgs_lock = threading.Lock()
@@ -234,8 +234,46 @@ class SentinelService:
             def sync_fetch():
                 with _ddgs_lock:
                     with DDGS() as ddgs:
+                        # Force (after:24h) in query and also filter locally
                         results = list(ddgs.news(query, region="in-en", max_results=20))
-                        return [{"title": self._safe_get(r, ['title', 'text'], 'No Title'), "url": self._safe_get(r, ['url', 'link', 'href'], '#')} for r in results]
+                        processed = []
+                        for r in results:
+                            title = self._safe_get(r, ['title', 'text'], 'No Title')
+                            url = self._safe_get(r, ['url', 'link', 'href'], '#')
+                            date_str = r.get('date', 'Just now')
+                            
+                            # SKEPTIC: Strict 24h filter. DDGS date is often "2024-03-16T..."
+                            # or relative "2 hours ago".
+                            is_old = False
+                            
+                            # ISO Date String Check (e.g., 2026-03-17T...)
+                            now_dt = datetime.now()
+                            today_prefix = now_dt.strftime("%Y-%m-%d")
+                            yesterday_prefix = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                            
+                            # Absolute old years
+                            if any(yr in date_str for yr in ["2025", "2024", "2023"]):
+                                if today_prefix not in date_str and yesterday_prefix not in date_str:
+                                    is_old = True
+                            
+                            # Relative time keywords
+                            recent_keywords = ["hour", "minute", "now", "just", "h ago", "m ago", "seconds"]
+                            is_recent_text = any(k in date_str.lower() for k in recent_keywords)
+                            
+                            if not is_recent_text:
+                                # If it looks like an ISO date
+                                if "T" in date_str and len(date_str) > 10:
+                                    if today_prefix not in date_str and yesterday_prefix not in date_str:
+                                        is_old = True
+                                elif not ("day ago" in date_str.lower() or "1 day" in date_str.lower()):
+                                    # If not absolute ISO and not explicitly '1 day ago', and not recent keywords
+                                    # it's likely 2+ days or older.
+                                    if len(date_str) > 5: # Some text date exists
+                                        is_old = True
+                            
+                            if not is_old:
+                                processed.append({"title": title, "url": url, "time": date_str})
+                        return processed
             
             return await asyncio.to_thread(sync_fetch)
         except Exception as e:

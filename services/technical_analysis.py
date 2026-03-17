@@ -60,10 +60,9 @@ class TechnicalAnalysisService:
             
             return df
         df = None
-        # SKEPTIC: GIFT Nifty is known to fail on Upstox Historical API. Skip to trigger fallback immediately.
-        is_gift = "GIFT" in ticker.upper()
+        # SKEPTIC: Always attempt Upstox for GIFT Nifty if authenticated, as mandate forbids proxies.
         
-        if not is_gift and data_provider == "upstox" and _upstox_svc.is_authenticated:
+        if data_provider == "upstox" and _upstox_svc.is_authenticated:
             # Existing Upstox Logic
             days = 30
             if period.endswith("d"): days = int(period.replace("d", ""))
@@ -96,15 +95,15 @@ class TechnicalAnalysisService:
                 logger.error(f"Upstox data fetch failed for {ticker} and Fallback is DISABLED.")
                 return pd.DataFrame() # Return empty to trigger error in UI
 
-            # Fallback to yfinance
-            logger.info(f"Using yfinance for {ticker} (Provider: {data_provider}, Fallback: {fallback_enabled})")
+        # SKEPTIC: GIFT Nifty is best represented by the authentic Upstox key.
+        # Hallucinating ^NSEI as a proxy is strictly forbidden by mandate.
+        if "GIFT" in ticker.upper():
+            yf_ticker = "NSE_INDEX|GIFT Nifty" # Still tries yf download which will fail, triggering error. Good.
+        else:
+            yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
+        
+        if df is None:
             try:
-                # SKEPTIC: GIFT Nifty is best represented by ^NSEI proxy on yfinance for charting
-                if "GIFT" in ticker.upper():
-                    yf_ticker = "^NSEI"
-                else:
-                    yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
-                
                 df = yf.download(yf_ticker, period=period, interval=interval, auto_adjust=True, progress=False)
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)

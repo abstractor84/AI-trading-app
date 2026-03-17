@@ -5,4 +5,10 @@ __pycache__/
 *.db
 *.log
 .pytest_cache/
-.DS_Store
+.DS_Store/
+all_instruments.json
+check_*.py
+search_*.py
+find_*.py
+test_stderr.txt
+deep_search_upstox.py

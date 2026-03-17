@@ -262,6 +262,7 @@ class AppState:
         with SessionLocal() as db:
             trade = db.query(Trade).filter(Trade.id == tid_str).first()
             if trade:
+                # 1. Update DB Status immediately
                 if trade.action == "BUY":
                     pnl = (exit_price - trade.entry_price) * trade.quantity
                 else:
@@ -272,25 +273,34 @@ class AppState:
                 trade.status = "CLOSED"
                 trade.close_time = datetime.utcnow()
                 db.commit()
-                db.refresh(trade)
 
-                # Update in-memory state: Filter MUST be string-to-string to prevent integer mismatches
-                before = len(self.open_trades)
-                self.open_trades = [t for t in self.open_trades if str(t.get('id')) != tid_str]
-                self.closed_trades.append(self._to_dict(trade))
-                logger.info(f"SKEPTIC: Memory sync complete. (Open: {before} -> {len(self.open_trades)})")
+                # 2. Optimized Memory Sync: Find by index instead of list comprehension for large sets
+                target_idx = -1
+                for i, t in enumerate(self.open_trades):
+                    if str(t.get('id')) == tid_str:
+                        target_idx = i
+                        break
+                
+                if target_idx != -1:
+                    popped = self.open_trades.pop(target_idx)
+                    # Use a lightweight dict update instead of _to_dict(trade) which re-reads all fields
+                    popped.update({
+                        "exit_price": exit_price,
+                        "pnl": round(pnl, 2),
+                        "status": "CLOSED",
+                        "close_time": trade.close_time.isoformat() + "Z"
+                    })
+                    self.closed_trades.append(popped)
+                    logger.info(f"SKEPTIC: Memory sync complete (index-based).")
 
-                # Add to action timeline
+                # 3. Add to action timeline
                 self.action_timeline.append({
                     "time": datetime.now().strftime("%H:%M:%S"),
                     "type": "TRADE_CLOSE",
-                    "message": (
-                        f"SUCCESS: Closed {trade.ticker} @ ₹{exit_price:.2f} | "
-                        f"P&L: ₹{trade.pnl:.2f}"
-                    )
+                    "message": f"SUCCESS: Closed {trade.ticker} @ ₹{exit_price:.2f} | P&L: ₹{pnl:.2f}"
                 })
             else:
-                logger.error(f"SKEPTIC: ID {tid_str} not found in DB. Logic sync failure.")
+                logger.error(f"SKEPTIC: ID {tid_str} not found in DB.")
 
     def add_dashboard_stock(self, ticker: str):
         self.dashboard_watch_stocks.add(ticker)
