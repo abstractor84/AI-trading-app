@@ -16,7 +16,7 @@ class QuotaService:
             "google": {"rpm": 15, "tpm": 1000000, "rpd": 20},
             "groq": {"rpm": 30, "tpm": 144000, "rpd": 20},
             "sambanova": {"rpm": 15, "tpm": 50000, "rpd": 20},
-            "yfinance": {"rpm": 30, "tpm": 1000, "rpd": 500},  # 30 req/min, 500/day (throttled for safety)
+            "yfinance": {"rpm": 60, "tpm": 1000, "rpd": 1800},  # 60 req/min, 1800/day (Yahoo allows ~2000/hour)
         }
 
     def _get_usage(self, db: Session, model_name: str) -> ApiUsage:

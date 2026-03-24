@@ -349,6 +349,7 @@ class BackgroundEngine:
                                 "bb_lower": _s(ta_data.get("bb_lower", 0), 2),
                                 "ema_9": _s(ta_data.get("ema_9", 0), 2),
                                 "ema_21": _s(ta_data.get("ema_21", 0), 2),
+                                "lz_score": _s(candidate.get("math_prob", 0), 2),  # SKEPTIC: Add LZ score for UI
                             },
                             "lorentzian": {
                                 "score": _s(candidate.get("math_prob", 0), 2),

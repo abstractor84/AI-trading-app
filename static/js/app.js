@@ -1661,20 +1661,58 @@ function handleLiveTick(tick) {
     updateDaySummary();
     renderTradeHistory();
 
-    // 3. Update active chart if it matches
+    // 3. Update active chart with live real-time ticks (SKEPTIC: Extend current candle, don't create new ones)
     if (appState.currentChartKey === tickerWithNS || appState.currentChartKey === cleanKey) {
-        if (appState.series.candles) {
-            const tickTime = (tick.ltt ? Math.floor(tick.ltt / 1000) : Math.floor(Date.now() / 1000)) + 19800;
-            appState.series.candles.update({
-                time: tickTime,
-                open: tick.ltp,
-                high: tick.ltp,
-                low: tick.ltp,
-                close: tick.ltp
-            });
-            // Update Legend LTP
+        if (appState.series.candles && appState.currentChartData && appState.currentChartData.length > 0) {
+            // Get the last candle (current period)
+            const candles = appState.currentChartData;
+            const lastCandle = candles[candles.length - 1];
+            
+            // Convert tick time to seconds since epoch
+            const tickTimeSec = (tick.ltt ? Math.floor(tick.ltt / 1000) : Math.floor(Date.now() / 1000)) + 19800;
+            
+            // If tick is in the same candle period, extend it; otherwise create new candle
+            const candleTime = lastCandle.time;
+            
+            // Check if tick is for the current candle (same time window)
+            const isSameCandle = tickTimeSec >= candleTime && tickTimeSec < candleTime + 300; // 5-min candles
+            
+            if (isSameCandle) {
+                // Extend existing candle
+                const updatedCandle = {
+                    time: candleTime,
+                    open: lastCandle.open,
+                    high: Math.max(lastCandle.high, tick.ltp),
+                    low: Math.min(lastCandle.low, tick.ltp),
+                    close: tick.ltp
+                };
+                appState.series.candles.update(updatedCandle);
+            } else {
+                // Create new candle (new time period)
+                appState.series.candles.update({
+                    time: tickTimeSec,
+                    open: tick.ltp,
+                    high: tick.ltp,
+                    low: tick.ltp,
+                    close: tick.ltp
+                });
+            }
+            
+            // Update Legend LTP and OHLC
             const ltpEl = document.getElementById('legend-ltp');
             if (ltpEl) ltpEl.textContent = `LTP: ₹${tick.ltp.toFixed(2)}`;
+            
+            // Update OHLC legend
+            const ohlcEl = document.getElementById('legend-ohlc');
+            if (ohlcEl) {
+                const c = isSameCandle ? {
+                    open: lastCandle.open,
+                    high: Math.max(lastCandle.high, tick.ltp),
+                    low: Math.min(lastCandle.low, tick.ltp),
+                    close: tick.ltp
+                } : { open: tick.ltp, high: tick.ltp, low: tick.ltp, close: tick.ltp };
+                ohlcEl.textContent = `O: ${c.open.toFixed(2)} H: ${c.high.toFixed(2)} L: ${c.low.toFixed(2)} C: ${c.close.toFixed(2)}`;
+            }
         }
     }
 }

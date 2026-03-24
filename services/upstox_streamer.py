@@ -407,17 +407,27 @@ class UpstoxLiveStream:
                 try:
                     # We extract the FullFeed or LTPC feed
                     # Handle different feed types that Upstox may send
-                    if feed.HasField('ff'):
-                        meta = feed.ff.marketFF.ltpc
-                        ltp = meta.ltp
-                        ticks.append({"key": instrument_key, "ltp": ltp, "ltt": meta.ltt})
+                    # SKEPTIC FIX: Field is 'fullFeed' not 'ff'
+                    if feed.HasField('fullFeed'):
+                        # fullFeed contains marketFF (market Full Feed) or indexFF
+                        if feed.fullFeed.HasField('marketFF'):
+                            meta = feed.fullFeed.marketFF.ltpc
+                            ltp = meta.ltp
+                            ltt = meta.ltt
+                        elif feed.fullFeed.HasField('indexFF'):
+                            meta = feed.fullFeed.indexFF.ltpc
+                            ltp = meta.ltp
+                            ltt = meta.ltt
+                        else:
+                            continue
+                        ticks.append({"key": instrument_key, "ltp": ltp, "ltt": ltt})
                     elif feed.HasField('ltpc'):
                         ltp = feed.ltpc.ltp
                         ticks.append({"key": instrument_key, "ltp": ltp, "ltt": feed.ltpc.ltt})
                     else:
-                        # Feed exists but doesn't have ff or ltpc fields
+                        # Feed exists but doesn't have fullFeed or ltpc fields
                         # This is normal for some feed types, just skip silently
-                        logger.debug(f"Feed for {instrument_key} has no ff or ltpc field")
+                        logger.debug(f"Feed for {instrument_key} has no fullFeed or ltpc field")
                 except Exception as inner_e:
                     # Handle any inner parsing errors for individual feeds
                     # Enhanced error logging with structured payload
@@ -432,7 +442,8 @@ class UpstoxLiveStream:
                     continue
             
             if ticks:
-                logger.debug(f"Decoded {len(ticks)} ticks (correlation_id={correlation_id})")
+                # SKEPTIC: Log first tick for debugging
+                logger.info(f"Decoded {len(ticks)} ticks: {ticks[0] if ticks else 'none'}")
             
             return ticks
         except Exception as e:
