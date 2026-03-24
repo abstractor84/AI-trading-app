@@ -12,7 +12,7 @@ def svc():
 
 def test_scan_market_basic(svc):
     candidates = [{"ticker": "RELIANCE.NS", "ta_data": {"close": 2500, "rsi_14": 50}, "math_prob": 0.8}]
-    global_ctx = {"india": {"NIFTY 50": {"value": 22000, "change_pct": 0.5}}, "vix": {"value": 15}}
+    global_ctx = {"india": {"Nifty 50": {"value": 22000, "change_pct": 0.5}}, "vix": {"value": 15}}
     phase_ctx = {"phase_label": "Opening", "mins_to_close": 300}
     
     with patch.object(svc, "_call_ai") as mock_call:
@@ -22,7 +22,7 @@ def test_scan_market_basic(svc):
 
 def test_review_positions_with_data(svc):
     trades = [{"ticker": "SBIN.NS", "action": "BUY", "quantity": 100, "entry_price": 600, "pnl": 50, "stop_loss": 590}]
-    global_ctx = {"india": {"NIFTY 50": {"value": 22000}}, "vix": {"value": 15}}
+    global_ctx = {"india": {"Nifty 50": {"value": 22000}}, "vix": {"value": 15}}
     phase_ctx = {"phase_label": "Mid-Day", "mins_to_close": 180}
     with patch.object(svc, "_call_ai") as mock_call:
         mock_call.return_value = [{"ticker": "SBIN.NS", "action": "HOLD"}]
@@ -31,7 +31,7 @@ def test_review_positions_with_data(svc):
 
 def test_exit_guidance_with_data(svc):
     trades = [{"ticker": "TCS.NS", "pnl": 500, "action": "BUY"}]
-    global_ctx = {"india": {"NIFTY 50": {"change_pct": 0.8}}}
+    global_ctx = {"india": {"Nifty 50": {"change_pct": 0.8}}}
     phase_ctx = {"phase_label": "Power Hour", "mins_to_close": 30}
     with patch.object(svc, "_call_ai") as mock_call:
         mock_call.return_value = {"should_close_all": True}

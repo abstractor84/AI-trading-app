@@ -10,6 +10,11 @@ const appState = {
     aiAdvisor: null, aiScansToday: [], actionTimeline: [], aiCallsToday: 0, aiCallsLimit: 7,
     chartInstance: null, adxChart: null, currentChartData: null,
     currentChartKey: null, currentInterval: '5m',
+    // Rate limit tracking
+    isRateLimited: false,
+    rateLimitCooldown: 0,
+    lastDataUpdate: null,
+    isDataStale: false,
     series: { candles: null, adxLine: null, rsiLine: null, stLine: null, knnUp: null, knnDown: null, projLine: null, upperBand: null, lowerBand: null, vwap: null },
     indicatorSettings: {
         st: { atr_period: 10, factor: 3.0, training_len: 100, p_low: 0.25, p_med: 0.5, p_high: 0.75 },
@@ -108,6 +113,130 @@ function sentimentClass(label) {
     return 'neutral';
 }
 
+/**
+ * Updates the data provider status badges in the settings panel.
+ */
+function updateDataProviderStatus(provider, isUsingFallback) {
+    const activeBadge = document.getElementById('provider-active-badge');
+    const fallbackBadge = document.getElementById('provider-fallback-badge');
+    
+    if (activeBadge) {
+        activeBadge.textContent = '● ' + (provider === 'upstox' ? 'Upstox' : 'YFinance');
+    }
+    
+    if (fallbackBadge) {
+        if (isUsingFallback) {
+            fallbackBadge.style.display = 'inline-block';
+            fallbackBadge.textContent = '↻ Using Fallback';
+        } else {
+            fallbackBadge.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * Updates the data provider quota display in the settings panel.
+ */
+function updateDataProviderQuota(quota) {
+    const upstoxQuotaEl = document.getElementById('upstox-quota');
+    const yfinanceQuotaEl = document.getElementById('yfinance-quota');
+    
+    if (upstoxQuotaEl && quota.upstox) {
+        upstoxQuotaEl.textContent = '∞';
+    }
+    
+    if (yfinanceQuotaEl && quota.yfinance) {
+        const yf = quota.yfinance;
+        const used = yf.limit_rpd - yf.remaining_rpd;
+        const pct = yf.used_rpd_pct || 0;
+        yfinanceQuotaEl.textContent = `${used}/${yf.limit_rpd}`;
+        
+        // Apply color classes based on usage
+        yfinanceQuotaEl.classList.remove('warning', 'danger');
+        if (pct >= 90) {
+            yfinanceQuotaEl.classList.add('danger');
+        } else if (pct >= 70) {
+            yfinanceQuotaEl.classList.add('warning');
+        }
+    }
+}
+
+/**
+ * Updates rate limit status display in the UI.
+ * Shows a warning badge when rate limited with countdown timer.
+ */
+function updateRateLimitStatus(status) {
+    appState.isRateLimited = status.is_rate_limited || false;
+    appState.rateLimitCooldown = status.remaining_cooldown || 0;
+    
+    // Find or create rate limit indicator
+    let rateLimitEl = document.getElementById('rate-limit-indicator');
+    if (!rateLimitEl) {
+        // Create the element if it doesn't exist
+        const header = document.querySelector('.header-actions') || document.querySelector('.top-bar');
+        if (header) {
+            rateLimitEl = document.createElement('div');
+            rateLimitEl.id = 'rate-limit-indicator';
+            rateLimitEl.className = 'rate-limit-badge';
+            rateLimitEl.style.cssText = 'display: none; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; margin-left: 10px;';
+            header.appendChild(rateLimitEl);
+        }
+    }
+    
+    if (rateLimitEl) {
+        if (appState.isRateLimited) {
+            rateLimitEl.style.display = 'inline-block';
+            rateLimitEl.style.background = 'rgba(239, 68, 68, 0.2)';
+            rateLimitEl.style.color = '#ef4444';
+            rateLimitEl.textContent = `⏳ Rate Limited (${appState.rateLimitCooldown}s)`;
+            
+            // Add stale data indicator to chart if visible
+            const chartContainer = document.getElementById('chart-container');
+            if (chartContainer) {
+                let staleBadge = document.getElementById('stale-data-badge');
+                if (!staleBadge) {
+                    staleBadge = document.createElement('div');
+                    staleBadge.id = 'stale-data-badge';
+                    staleBadge.className = 'stale-badge';
+                    staleBadge.style.cssText = 'position: absolute; top: 10px; right: 10px; padding: 4px 8px; background: rgba(251, 191, 36, 0.2); color: #fbbf24; border-radius: 4px; font-size: 11px; font-weight: 600; z-index: 10;';
+                    staleBadge.textContent = '📊 Cached Data';
+                    chartContainer.parentElement.style.position = 'relative';
+                    chartContainer.parentElement.appendChild(staleBadge);
+                }
+                staleBadge.style.display = 'block';
+            }
+        } else {
+            rateLimitEl.style.display = 'none';
+            
+            // Hide stale data badge
+            const staleBadge = document.getElementById('stale-data-badge');
+            if (staleBadge) {
+                staleBadge.style.display = 'none';
+            }
+        }
+    }
+    
+    // Update app state for data freshness
+    appState.isDataStale = appState.isRateLimited;
+}
+
+/**
+ * Updates the data freshness indicator based on last update time.
+ */
+function updateDataFreshness(lastUpdate) {
+    if (!lastUpdate) {
+        appState.lastDataUpdate = null;
+        return;
+    }
+    
+    appState.lastDataUpdate = lastUpdate;
+    const lastUpdateEl = document.getElementById('last-update-time');
+    if (lastUpdateEl) {
+        const date = new Date(lastUpdate);
+        lastUpdateEl.textContent = date.toLocaleTimeString('en-IN');
+    }
+}
+
 // ─── WebSocket Initialization ───────────────────────────────────────
 const ws = new WebSocket(`ws://${window.location.host}/ws`);
 
@@ -118,6 +247,17 @@ const ws = new WebSocket(`ws://${window.location.host}/ws`);
  */
 function openChart(ticker) {
     if (!ticker) return;
+    
+    // CRITICAL FIX: Clear chart data BEFORE requesting new data
+    // This fixes the bug where reopening same ticker shows old data
+    if (appState.chartInstance) {
+        Object.values(appState.series).forEach(s => { 
+            if(s && s.setData) s.setData([]); 
+        });
+        if (appState.series.candles) appState.series.candles.setMarkers([]);
+    }
+    // Also clear the global lastChartTicker to force fresh load
+    window.lastChartTicker = "";
     
     // SKEPTIC: Robust ticker cleaning for Search Lookups
     let cleanTicker = ticker.toUpperCase();
@@ -491,6 +631,15 @@ function renderChart(data) {
     if (!data || data.error) {
         showToast(data?.error || "Chart data unavailable", "error");
         return;
+    }
+    
+    // Handle stale data indicator from rate limiting
+    if (data.is_stale_data) {
+        const staleBadge = document.getElementById('stale-data-badge');
+        if (staleBadge) {
+            staleBadge.style.display = 'block';
+        }
+        appState.isDataStale = true;
     }
 
     const container = document.getElementById('chart-container');
@@ -948,7 +1097,7 @@ function updateMarketPulse(ctx) {
     const vixValEl = document.getElementById('vix-val');
     if (vixValEl) {
         const sign = (vix.change_pct || 0) >= 0 ? '+' : '';
-        vixValEl.textContent = vix.value ? `${vix.value} (${sign}${vix.change_pct}%)` : '--';
+        vixValEl.textContent = (vix.value !== undefined && vix.value !== null) ? `${vix.value} (${sign}${vix.change_pct}%)` : '--';
         vixValEl.className = (vix.change_pct || 0) > 2 ? 'negative' : (vix.change_pct || 0) < -2 ? 'positive' : '';
     }
 
@@ -956,7 +1105,7 @@ function updateMarketPulse(ctx) {
     const global = ctx.global || {};
 
     // Indian Indices Order
-    const inOrder = ["GIFT Nifty", "NIFTY 50", "SENSEX", "BANK NIFTY", "FINNIFTY", "NIFTY MIDCAP 100", "NIFTY SMALLCAP 100"];
+    const inOrder = ["GIFT Nifty", "Nifty 50", "Sensex", "Bank Nifty", "FinNifty", "Nifty Midcap 100", "Nifty Smallcap 100"];
     let htmlIn = '';
     inOrder.forEach(name => {
         const d = india[name] || global[name];
@@ -970,7 +1119,7 @@ function updateMarketPulse(ctx) {
     if (pulseIndia) pulseIndia.innerHTML = htmlIn || '<span class="pulse-item">Waiting for Indian market data...</span>';
 
     // Global Indices Order
-    const glOrder = ["USD/INR", "WTI Crude", "Brent Crude", "Gold", "Silver", "S&P 500", "NASDAQ"];
+    const glOrder = ["USD/INR", "WTI Crude", "Brent Crude", "Gold", "Silver", "S&P 500", "Nasdaq"];
     let htmlGl = '';
     glOrder.forEach(name => {
         const d = global[name];
@@ -1358,29 +1507,28 @@ function handleStateUpdate(msg) {
         renderIntradayAIHistory();
     }
 
-    // 6. Holiday Alerts
+    // 6. Holiday Alerts - Show in banner below P&L section
+    const holidayBanner = document.getElementById('holiday-alert-banner');
+    const holidayMessage = document.getElementById('holiday-alert-message');
+    
     if (msg.holiday_info) {
         const info = msg.holiday_info;
         if (info.is_holiday) {
-            showAlert("Market Closed", `Today is ${info.holiday_name || 'a holiday'}. Markets are closed.`);
+            if (holidayBanner && holidayMessage) {
+                holidayMessage.textContent = `Today is ${info.holiday_name || 'a holiday'}. Markets are closed.`;
+                holidayBanner.style.display = 'flex';
+            }
         } else if (info.upcoming) {
-            showAlert("Upcoming Holiday", `Reminder: Markets will be closed on ${info.upcoming.date} for ${info.upcoming.name} (${info.upcoming.days_away} days away).`);
+            if (holidayBanner && holidayMessage) {
+                holidayMessage.textContent = `Markets will be closed on ${info.upcoming.date} for ${info.upcoming.name} (${info.upcoming.days_away} days away).`;
+                holidayBanner.style.display = 'flex';
+            }
+        } else {
+            // No holiday - hide banner
+            if (holidayBanner) {
+                holidayBanner.style.display = 'none';
+            }
         }
-    }
-    }
-
-    /**
-    * Shows a system-wide alert modal.
-    */
-    function showAlert(title, message) {
-    const modal = document.getElementById('alert-modal');
-    const titleEl = document.getElementById('alert-title');
-    const msgEl = document.getElementById('alert-message');
-    if (modal && titleEl && msgEl) {
-        titleEl.textContent = title;
-        msgEl.textContent = message;
-        modal.style.display = 'flex';
-    }
     }
 
     // 3. Risk & Settings (Requirement 4: Strict Checks)
@@ -1401,6 +1549,27 @@ function handleStateUpdate(msg) {
     if (msg.data_provider) {
         const dp = document.getElementById('data-provider-input');
         if (dp) dp.value = msg.data_provider;
+        
+        // Update provider status badges
+        updateDataProviderStatus(msg.data_provider, msg.is_using_fallback);
+    }
+    
+    // Update data provider quota display
+    if (msg.data_provider_quota) {
+        updateDataProviderQuota(msg.data_provider_quota);
+    }
+    
+    // Update rate limit status
+    if (msg.rate_limit_status) {
+        updateRateLimitStatus(msg.rate_limit_status);
+    }
+    
+    // Update data freshness status
+    if (msg.is_data_stale !== undefined) {
+        appState.isDataStale = msg.is_data_stale;
+    }
+    if (msg.last_data_update) {
+        updateDataFreshness(msg.last_data_update);
     }
     if (msg.ai_provider) {
         const ap = document.getElementById('ai-provider-input');
@@ -1447,6 +1616,20 @@ function handleStateUpdate(msg) {
     renderTradeHistory();
     renderIntradayAIHistory();
     if (msg.ai_advisor !== undefined) handleAIAdvisorUpdate(msg.ai_advisor);
+}
+
+/**
+ * Shows a system-wide alert modal.
+ */
+function showAlert(title, message) {
+    const modal = document.getElementById('alert-modal');
+    const titleEl = document.getElementById('alert-title');
+    const msgEl = document.getElementById('alert-message');
+    if (modal && titleEl && msgEl) {
+        titleEl.textContent = title;
+        msgEl.textContent = message;
+        modal.style.display = 'flex';
+    }
 }
 
 /**
@@ -1637,8 +1820,12 @@ ws.onmessage = (event) => {
                     });
                 }
                 break;
-            case "notification":
-                console.warn("Unknown message type:", msg.type);
+            case "market_data":
+                // Handle market data updates from ws_handler (global indices)
+                if (msg.global_context) {
+                    updateMarketPulse(msg.global_context);
+                }
+                break;
         }
     } catch (e) {
         console.error("Message handling error", e);
@@ -1808,7 +1995,8 @@ document.addEventListener('DOMContentLoaded', () => {
             fallback_ai: document.getElementById('fallback-ai-input').checked
         };
         ws.send(JSON.stringify(settings));
-        showToast("Configuration Transmitted", "success");
+        // Show "saving" indicator - actual confirmation comes from server
+        showToast("Saving settings to database...", "info");
     });
 
     // 6. Backtest Runner
@@ -1841,6 +2029,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 timeZone: 'Asia/Kolkata',
                 hour12: false
             });
+        }
+        
+        // Update rate limit countdown
+        if (appState.isRateLimited && appState.rateLimitCooldown > 0) {
+            appState.rateLimitCooldown--;
+            const rateLimitEl = document.getElementById('rate-limit-indicator');
+            if (rateLimitEl && rateLimitEl.style.display !== 'none') {
+                rateLimitEl.textContent = `⏳ Rate Limited (${appState.rateLimitCooldown}s)`;
+            }
+            
+            // Auto-refresh when cooldown expires
+            if (appState.rateLimitCooldown <= 0) {
+                appState.isRateLimited = false;
+                updateRateLimitStatus({ is_rate_limited: false, remaining_cooldown: 0 });
+                showToast('Rate limit expired. Data will refresh.', 'info');
+            }
         }
     }, 1000);
 });

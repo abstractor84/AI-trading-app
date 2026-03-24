@@ -10,12 +10,14 @@ logger = logging.getLogger(__name__)
 class QuotaService:
     def __init__(self):
         # Strict user limits: max 20/day per provider
+        # yfinance limits: ~2000 requests/hour per IP, but we throttle to be safe
+        # We use higher limits now with aggressive caching to prevent rate limits
         self.defaults = {
             "google": {"rpm": 15, "tpm": 1000000, "rpd": 20},
             "groq": {"rpm": 30, "tpm": 144000, "rpd": 20},
             "sambanova": {"rpm": 15, "tpm": 50000, "rpd": 20},
+            "yfinance": {"rpm": 30, "tpm": 1000, "rpd": 500},  # 30 req/min, 500/day (throttled for safety)
         }
-
 
     def _get_usage(self, db: Session, model_name: str) -> ApiUsage:
         usage = db.query(ApiUsage).filter(ApiUsage.model_name == model_name).first()
@@ -25,29 +27,80 @@ class QuotaService:
                 model_name=model_name,
                 limit_rpm=limits["rpm"],
                 limit_tpm=limits["tpm"],
-                limit_rpd=limits["rpd"]
+                limit_rpd=limits["rpd"],
+                minute_requests=0,  # Explicitly initialize to 0
+                minute_tokens=0,    # Explicitly initialize to 0
+                day_requests=0,    # Explicitly initialize to 0
+                last_request_at=None  # Will be set on first request
             )
             db.add(usage)
             db.commit()
             db.refresh(usage)
+            logger.debug(f"Created new ApiUsage record for {model_name}")
         return usage
+
+    def _get_now(self) -> datetime:
+        """Get current time as naive datetime for consistent comparison."""
+        return datetime.now(UTC).replace(tzinfo=None)
+
+    def _reset_if_needed(self, db: Session, usage: ApiUsage) -> bool:
+        """Reset counters if needed based on time. Returns True if reset occurred."""
+        now = self._get_now()
+        reset_occurred = False
+        
+        # Reset minute counters if a minute has passed or if last_request_at is None
+        if usage.last_request_at is None:
+            logger.debug(f"Resetting minute counters for {usage.model_name}: last_request_at is None")
+            usage.minute_requests = 0
+            usage.minute_tokens = 0
+            reset_occurred = True
+        else:
+            # Ensure last_request_at is naive for comparison
+            last_req = usage.last_request_at
+            if last_req.tzinfo is not None:
+                last_req = last_req.replace(tzinfo=None)
+            
+            time_diff = now - last_req
+            if time_diff > timedelta(minutes=1):
+                logger.debug(f"Resetting minute counters for {usage.model_name}: {time_diff} > 1 minute")
+                usage.minute_requests = 0
+                usage.minute_tokens = 0
+                reset_occurred = True
+        
+        # Reset day counters if it's a new calendar day
+        if usage.last_request_at is None:
+            logger.debug(f"Resetting day counters for {usage.model_name}: last_request_at is None")
+            usage.day_requests = 0
+            reset_occurred = True
+        else:
+            # Ensure last_request_at is naive for comparison
+            last_req = usage.last_request_at
+            if last_req.tzinfo is not None:
+                last_req = last_req.replace(tzinfo=None)
+            
+            if now.date() > last_req.date():
+                logger.debug(f"Resetting day counters for {usage.model_name}: new day detected")
+                usage.day_requests = 0
+                reset_occurred = True
+        
+        return reset_occurred
 
     def check_quota(self, model_name: str) -> dict:
         """Check if we have enough quota for 1 request."""
         db = SessionLocal()
         try:
             usage = self._get_usage(db, model_name)
-            now = datetime.now(UTC).replace(tzinfo=None)
+            now = self._get_now()
 
-
-            # Reset minute counters if a minute has passed
-            if (now - usage.last_request_at) > timedelta(minutes=1):
-                usage.minute_requests = 0
-                usage.minute_tokens = 0
+            # Reset counters if needed
+            self._reset_if_needed(db, usage)
             
-            # Reset day counters if it's a new calendar day
-            if now.date() > usage.last_request_at.date():
-                usage.day_requests = 0
+            # Commit the reset if any
+            db.commit()
+
+            # Debug logging to see current quota values
+            logger.debug(f"Quota check for {model_name}: minute_requests={usage.minute_requests}/{usage.limit_rpm}, "
+                        f"day_requests={usage.day_requests}/{usage.limit_rpd}, last_request_at={usage.last_request_at}")
 
             can_call = (
                 usage.minute_requests < usage.limit_rpm and
@@ -67,7 +120,11 @@ class QuotaService:
                 "used_rpd_pct": round((usage.day_requests / usage.limit_rpd) * 100, 1) if usage.limit_rpd > 0 else 0,
                 "low_quota": max(0, usage.limit_rpd - usage.day_requests) < 3
             }
-            db.commit()
+            
+            # Refresh from DB to get any updated values after commit
+            db.refresh(usage)
+            logger.debug(f"Quota status for {model_name}: can_call={can_call}, remaining_rpm={status['remaining_rpm']}, remaining_rpd={status['remaining_rpd']}")
+            
             return status
         finally:
             db.close()
@@ -77,17 +134,10 @@ class QuotaService:
         db = SessionLocal()
         try:
             usage = self._get_usage(db, model_name)
-            now = datetime.now(UTC).replace(tzinfo=None)
+            now = self._get_now()
 
-
-            # Reset minute counters if a minute has passed
-            if (now - usage.last_request_at) > timedelta(minutes=1):
-                usage.minute_requests = 0
-                usage.minute_tokens = 0
-            
-            # Reset day counters if it's a new calendar day
-            if now.date() > usage.last_request_at.date():
-                usage.day_requests = 0
+            # Reset counters if needed before incrementing
+            self._reset_if_needed(db, usage)
 
             usage.minute_requests += 1
             usage.day_requests += 1
@@ -99,11 +149,41 @@ class QuotaService:
         finally:
             db.close()
 
+    def reset_quota(self, model_name: str = None):
+        """Manually reset quota counters. If model_name is None, reset all."""
+        db = SessionLocal()
+        try:
+            if model_name:
+                usage = db.query(ApiUsage).filter(ApiUsage.model_name == model_name).first()
+                if usage:
+                    usage.minute_requests = 0
+                    usage.minute_tokens = 0
+                    usage.day_requests = 0
+                    # Don't reset last_request_at - it will be set on next request
+                    db.commit()
+                    logger.info(f"Manually reset quota for {model_name}")
+                else:
+                    logger.warning(f"No ApiUsage record found for {model_name}")
+            else:
+                # Reset all
+                usages = db.query(ApiUsage).all()
+                for usage in usages:
+                    usage.minute_requests = 0
+                    usage.minute_tokens = 0
+                    usage.day_requests = 0
+                db.commit()
+                logger.info(f"Manually reset quota for all models ({len(usages)} records)")
+        finally:
+            db.close()
+
     def get_daily_usage(self, model_name: str) -> int:
         """Helper for dashboard health status."""
         db = SessionLocal()
         try:
             usage = self._get_usage(db, model_name)
+            # Reset if needed before returning
+            self._reset_if_needed(db, usage)
+            db.commit()
             return usage.day_requests
         finally:
             db.close()
@@ -112,16 +192,30 @@ class QuotaService:
         """Helper to sum usage across all models for the dashboard quota tracker."""
         db = SessionLocal()
         try:
-            now = datetime.now(UTC).replace(tzinfo=None)
+            now = self._get_now()
             # Only sum requests from today
             usages = db.query(ApiUsage).all()
             total = 0
             for u in usages:
-                if now.date() == u.last_request_at.date():
-                    total += u.day_requests
+                if u.last_request_at is not None:
+                    # Ensure naive comparison
+                    last_req = u.last_request_at
+                    if last_req.tzinfo is not None:
+                        last_req = last_req.replace(tzinfo=None)
+                    if now.date() == last_req.date():
+                        total += u.day_requests
             return total
         finally:
             db.close()
+
+    def check_yfinance_quota(self) -> bool:
+        """Check if we can make a yfinance request (throttled)."""
+        status = self.check_quota("yfinance")
+        return status.get("can_call", False)
+
+    def log_yfinance_usage(self):
+        """Log a yfinance API call."""
+        self.log_usage("yfinance", tokens=0)
 
 # Module-level singleton
 quota_svc = QuotaService()

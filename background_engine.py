@@ -15,11 +15,13 @@ from services.technical_analysis import TechnicalAnalysisService
 from services.stock_discovery import StockDiscoveryService
 from services.sentinel_service import sentinel_svc
 from services.ai_scorer import ai_advisor
+from services.news_sentiment import NewsSentimentService
 
 logger = logging.getLogger(__name__)
 
 ta_svc = TechnicalAnalysisService()
 discovery_svc = StockDiscoveryService()
+news_svc = NewsSentimentService()
 
 
 class BackgroundEngine:
@@ -39,10 +41,17 @@ class BackgroundEngine:
         self._last_ai_call_time = None
         self._ai_call_count_today = 0
         self._last_date = None
+        self._last_news_fetch_time = None
+        self._news_fetch_interval = 900  # 15 minutes (in seconds)
+        self._background_news_running = False
 
     async def run(self):
         """Main background loop — runs continuously while the app is alive."""
         logger.info("V2 Background Engine started")
+        
+        # Start background news service
+        self._background_news_running = True
+        asyncio.create_task(self._background_news_loop())
 
         while True:
             try:
@@ -129,7 +138,7 @@ class BackgroundEngine:
                 trade['current_price'] = current_price
 
                 # P&L calculation
-                if trade['action'] == "BUY":
+                if trade.get('action') == "BUY":
                     pnl = (current_price - trade['entry_price']) * trade['quantity']
                 else:
                     pnl = (trade['entry_price'] - current_price) * trade['quantity']
@@ -141,7 +150,7 @@ class BackgroundEngine:
 
                 # Trailing SL
                 trailing_sl = risk_engine.compute_trailing_sl(
-                    trade['entry_price'], current_price, trade['action'], atr
+                    trade['entry_price'], current_price, trade.get('action'), atr
                 )
                 trade['trailing_sl'] = trailing_sl
 
@@ -190,18 +199,11 @@ class BackgroundEngine:
             prompt_type = "POSITION_REVIEW"
 
         self._last_ai_call_time = now
-        self._ai_call_count_today += 1
 
         provider = getattr(self.state, 'ai_provider', 'google')
         model = getattr(self.state, 'ai_model', 'gemini-3.1-pro')
         search_engine = getattr(self.state, 'search_engine', 'ddgs')
         data_provider = getattr(self.state, 'data_provider', 'yfinance')
-
-        logger.info(f"\n=====================================")
-        logger.info(f"AI Call #{self._ai_call_count_today}/7: {prompt_type}")
-        logger.info(f"Data Source: {data_provider} | Search: {search_engine}")
-        logger.info(f"AI Engine: {provider} | Model: {model}")
-        logger.info(f"=====================================")
 
         try:
             if prompt_type == "SCAN":
@@ -233,9 +235,8 @@ class BackgroundEngine:
                         else:
                             logger.info(log_msg + f" -> [MATH: FAIL] (Score: {math_prob})")
 
-                if not candidates:
-                    logger.info("No stocks passed the mathematical setup pre-filter. Skipping AI scan to save API limits.")
-                    return  # Fast-exit right back out of the loop!
+                # Counter only increments AFTER math filter passes - don't waste AI calls on filtered out candidates
+                self._ai_call_count_today += 1
 
                 from services.quota_service import quota_svc
                 quota_check = quota_svc.check_quota(provider)
@@ -244,6 +245,13 @@ class BackgroundEngine:
                     return
 
                 logger.info(f"Passing {len(candidates)} mathematically validated Candidates to AI Scorer...")
+                
+                logger.info(f"\n=====================================")
+                logger.info(f"AI Call #{self._ai_call_count_today}/20: {prompt_type}")
+                logger.info(f"Data Source: {data_provider} | Search: {search_engine}")
+                logger.info(f"AI Engine: {provider} | Model: {model}")
+                logger.info(f"=====================================")
+                
                 raw_result = await asyncio.to_thread(
                     ai_advisor.scan_market, candidates,
                     self.state.global_context, phase_ctx, provider, model,
@@ -353,6 +361,15 @@ class BackgroundEngine:
                         })
 
             elif prompt_type == "POSITION_REVIEW":
+                # Counter increments for actual AI call (no pre-filter for position reviews)
+                self._ai_call_count_today += 1
+                
+                logger.info(f"\n=====================================")
+                logger.info(f"AI Call #{self._ai_call_count_today}/20: {prompt_type}")
+                logger.info(f"Data Source: {data_provider} | Search: {search_engine}")
+                logger.info(f"AI Engine: {provider} | Model: {model}")
+                logger.info(f"=====================================")
+                
                 raw_result = await asyncio.to_thread(
                     ai_advisor.review_positions, self.state.open_trades,
                     self.state.global_context, phase_ctx, provider, model,
@@ -408,6 +425,15 @@ class BackgroundEngine:
                     result = raw_result
 
             elif prompt_type == "EXIT_GUIDANCE":
+                # Counter increments for actual AI call
+                self._ai_call_count_today += 1
+                
+                logger.info(f"\n=====================================")
+                logger.info(f"AI Call #{self._ai_call_count_today}/20: {prompt_type}")
+                logger.info(f"Data Source: {data_provider} | Search: {search_engine}")
+                logger.info(f"AI Engine: {provider} | Model: {model}")
+                logger.info(f"=====================================")
+                
                 result = await asyncio.to_thread(
                     ai_advisor.exit_guidance, self.state.open_trades,
                     self.state.global_context, phase_ctx, provider, model
@@ -460,8 +486,68 @@ class BackgroundEngine:
             "fallback_ai": getattr(self.state, 'fallback_ai', True),
             "ai_provider": getattr(self.state, 'ai_provider', 'google'),
             "ai_model": getattr(self.state, 'ai_model', 'gemini-3.1-pro'),
+            "last_market_news": getattr(self.state, 'last_market_news', None),
         }
         await self.manager.broadcast(payload)
+
+    async def _background_news_loop(self):
+        """
+        Background news fetching loop.
+        Runs every 15 minutes regardless of market hours.
+        Uses dynamic time filtering based on open positions.
+        """
+        logger.info("Background news loop started")
+        
+        while self._background_news_running:
+            try:
+                # Check if there are open positions
+                has_positions = len(self.state.open_trades) > 0
+                
+                # Determine time window based on positions
+                hours = 10 if has_positions else 36
+                
+                logger.info(f"Fetching market news (has_positions={has_positions}, hours={hours})")
+                
+                # Fetch market news
+                news = await asyncio.to_thread(
+                    news_svc.fetch_market_news,
+                    has_open_positions=has_positions
+                )
+                
+                if news:
+                    # Score sentiment using keyword-based analysis
+                    from services.news_sentiment import _keyword_sentiment
+                    sentiment = _keyword_sentiment(news[:10])
+                    
+                    # Store in state for UI access
+                    self.state.last_market_news = {
+                        "headlines": news[:20],  # Keep top 20
+                        "sentiment": sentiment,
+                        "has_open_positions": has_positions,
+                        "hours_filtered": hours,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    # Broadcast to connected clients
+                    await self.manager.broadcast({
+                        "type": "market_news",
+                        "data": self.state.last_market_news
+                    })
+                    
+                    logger.info(f"Background news: {len(news)} items, sentiment: {sentiment['label']}")
+                else:
+                    logger.debug("Background news: No news fetched")
+                    
+            except Exception as e:
+                logger.error(f"Background news loop error: {e}", exc_info=True)
+            
+            # Wait 15 minutes before next fetch
+            await asyncio.sleep(900)
+    
+    def stop_background_news(self):
+        """Stop the background news loop."""
+        self._background_news_running = False
+        logger.info("Background news loop stopped")
 
     def _get_sleep_interval(self, phase: str) -> int:
         """Faster refresh during active hours, slower otherwise."""

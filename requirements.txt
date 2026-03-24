@@ -1,4 +1,16 @@
 dotenv
 lxml
 pytz
-pytz
+fastapi
+uvicorn
+sqlalchemy
+pandas
+numpy
+pandas-ta
+scikit-learn
+requests
+websockets
+protobuf
+google-genai
+groq
+httpx

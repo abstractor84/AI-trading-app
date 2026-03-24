@@ -45,6 +45,9 @@ class AppState:
         self.ai_scans_today = []        # Store last 50 recommendations for historical analysis
         self.action_timeline = []  # Chronological log of events
         self.simulation_mode = os.getenv("SIMULATION", "false").lower() == "true"
+        
+        # Market News (background news service)
+        self.last_market_news = None  # Last fetched market news with sentiment
 
         self._load_from_db()
 
@@ -190,7 +193,11 @@ class AppState:
                         search_engine: str = 'tavily', data_provider: str = 'upstox',
                         fallback_data: bool = True, fallback_search: bool = True,
                         fallback_ai: bool = True,
-                        ai_provider: str = 'google', ai_model: str = 'gemini-3.1-pro'):
+                        ai_provider: str = 'google', ai_model: str = 'gemini-3.1-pro') -> bool:
+        """
+        Update settings and persist to database.
+        Returns True if successful, False otherwise.
+        """
         self.capital = capital
         self.max_loss_per_trade = max_loss
         self.search_engine = search_engine
@@ -202,21 +209,27 @@ class AppState:
         self.ai_model = ai_model
 
         with SessionLocal() as db:
-            settings = db.query(AppSettings).filter(AppSettings.id == 1).first()
-            if not settings:
-                settings = AppSettings(id=1)
-                db.add(settings)
+            try:
+                settings = db.query(AppSettings).filter(AppSettings.id == 1).first()
+                if not settings:
+                    settings = AppSettings(id=1)
+                    db.add(settings)
 
-            settings.capital = capital
-            settings.max_loss_per_trade = max_loss
-            settings.search_engine = search_engine
-            settings.data_provider = data_provider
-            settings.fallback_data = fallback_data
-            settings.fallback_search = fallback_search
-            settings.fallback_ai = fallback_ai
-            settings.ai_provider = ai_provider
-            settings.ai_model = ai_model
-            db.commit()
+                settings.capital = capital
+                settings.max_loss_per_trade = max_loss
+                settings.search_engine = search_engine
+                settings.data_provider = data_provider
+                settings.fallback_data = fallback_data
+                settings.fallback_search = fallback_search
+                settings.fallback_ai = fallback_ai
+                settings.ai_provider = ai_provider
+                settings.ai_model = ai_model
+                db.commit()
+                return True
+            except Exception as e:
+                logger.error(f"Failed to save settings to database: {e}")
+                db.rollback()
+                return False
 
     def log_trade(self, ticker: str, action: str, qty: int, entry_price: float,
                   sl: float, t1: float, t2: float,
@@ -316,7 +329,7 @@ class AppState:
             if trade['ticker'] == ticker:
                 trade['current_price'] = price
                 # Update P&L
-                if trade['action'] == "BUY":
+                if trade.get('action') == "BUY":
                     pnl = (price - trade['entry_price']) * trade['quantity']
                 else:
                     pnl = (trade['entry_price'] - price) * trade['quantity']

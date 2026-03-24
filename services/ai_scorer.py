@@ -77,7 +77,7 @@ class AIAdvisorService:
         stocks_block = "\n".join(stock_summaries)
 
         # Extract clean index context
-        nifty = global_context.get("india", {}).get("NIFTY 50", {})
+        nifty = global_context.get("india", {}).get("Nifty 50", {})
         vix = global_context.get("vix", {})
 
         prompt = f"""You are a DISCIPLINED NSE INTRADAY TRADING ADVISOR.
@@ -138,14 +138,14 @@ If NO high-conviction trades exist despite the high math probability, return: []
             pos_summaries.append(
                 f"• {t['ticker']} {t['action']} ×{t['quantity']} @ ₹{t['entry_price']:.2f}\n"
                 f"  Current: ₹{t.get('current_price', 0):.2f} | "
-                f"P&L: ₹{t.get('pnl', 0):.2f} | "
+                f"P&L: ₹{t.get('pnl') or 0:.2f} | "
                 f"SL: ₹{t['stop_loss']:.2f} | Trail SL: ₹{t.get('trailing_sl', 0):.2f}\n"
                 f"  Risk Engine says: {risk_advice.get('advice', 'N/A')} — {risk_advice.get('reason', '')}"
             )
 
         positions_block = "\n".join(pos_summaries)
 
-        nifty = global_context.get("india", {}).get("NIFTY 50", {})
+        nifty = global_context.get("india", {}).get("Nifty 50", {})
         vix = global_context.get("vix", {})
 
         prompt = f"""You are an INTRADAY POSITION MANAGER for NSE equities.
@@ -199,10 +199,10 @@ OUTPUT: Strictly valid JSON array:
         pos_lines = []
         for t in open_trades:
             pos_lines.append(
-                f"• {t['ticker']} {t['action']} P&L: ₹{t.get('pnl', 0):.2f}"
+                f"• {t['ticker']} {t['action']} P&L: ₹{t.get('pnl') or 0:.2f}"
             )
 
-        nifty = global_context.get("india", {}).get("NIFTY 50", {})
+        nifty = global_context.get("india", {}).get("Nifty 50", {})
 
         prompt = f"""You are a RISK-FIRST EXIT ADVISOR for NSE intraday trading.
 

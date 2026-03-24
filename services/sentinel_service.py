@@ -141,12 +141,20 @@ class SentinelService:
         """
         all_news = []
         
+        # Keep track of seen URLs/titles to avoid duplicates
+        seen_headlines = set()
+        
         # ─── MODE 1: WITH POSITION (High-Priority) ───────────────────
         if open_trades:
             pos_tickers = [t['ticker'].replace('.NS', '') for t in open_trades]
-            # Combined query for speed and context
-            pos_query = f"(after:24h) ({' OR '.join(pos_tickers)}) (stock news OR breaking OR results OR alert)"
-            macro_query = "(after:24h) India market (war OR tariff OR sanctions OR politics OR global shock OR RBI OR Fed)"
+            # FIXED: Use simpler query format - DDGS doesn't handle complex OR queries well
+            # Just use first ticker for the search - avoid "OR OR OR" pattern
+            if len(pos_tickers) == 1:
+                pos_query = f"{pos_tickers[0]} stock news India"
+            else:
+                # For multiple tickers, just search for generic market news
+                pos_query = f"India stock market news"
+            macro_query = "India market news war tariff sanctions politics global shock RBI Fed"
             
             for q in [pos_query, macro_query]:
                 results = await self._fetch_news(q, state, manager)
@@ -154,15 +162,25 @@ class SentinelService:
                 for item in results:
                     title = self._safe_get(item, ['title', 'text'])
                     url = self._safe_get(item, ['url', 'link', 'href'])
+                    
+                    # Skip duplicates
+                    headline_key = title.lower().strip()
+                    if headline_key in seen_headlines:
+                        continue
+                    seen_headlines.add(headline_key)
+                    
                     found_keywords = self._check_keywords(title)
+                    
+                    # Determine sentiment using keyword-based approach (no AI)
+                    sentiment = self._get_sentiment_from_keywords(found_keywords)
                     
                     # Always add to the unified news feed
                     headline = {
                         "ticker": "POSITIONS" if q == pos_query else "MACRO",
                         "title": title,
                         "url": url,
-                        "sentiment": "Bearish" if any(k in ["crash", "plunge", "sanctions", "war", "fraud"] for k in found_keywords) else "Bullish" if any(k in ["order", "win", "win", "surge"] for k in found_keywords) else "Neutral",
-                        "time": "Just now"
+                        "sentiment": sentiment,
+                        "time": item.get('time', 'Just now')
                     }
                     all_news.append(headline)
 
@@ -172,7 +190,7 @@ class SentinelService:
                             "title": title,
                             "url": url,
                             "priority": "HIGH",
-                            "sentiment": headline["sentiment"],
+                            "sentiment": sentiment,
                             "time": "Just now"
                         }
                         if manager:
@@ -181,20 +199,68 @@ class SentinelService:
         # ─── MODE 2: WITHOUT POSITION (Opportunity Scan) ─────────────
         watchlist = [t.replace('.NS', '') for t in watchlist_tickers if t not in [p['ticker'] for p in open_trades]]
         if watchlist:
-            watch_query = f"(after:24h) ({' OR '.join(watchlist[:5])}) stock news breaking OR surge OR order"
+            # FIXED: Removed invalid (after:24h) parameter
+            watch_query = f"{' OR '.join(watchlist[:5])} stock news India breaking surge order"
             results = await self._fetch_news(watch_query, state, manager)
             for item in results:
                 title = self._safe_get(item, ['title', 'text'])
                 url = self._safe_get(item, ['url', 'link', 'href'])
+                
+                # Skip duplicates
+                headline_key = title.lower().strip()
+                if headline_key in seen_headlines:
+                    continue
+                seen_headlines.add(headline_key)
+                
                 found_keywords = self._check_keywords(title)
+                
+                # Keyword-based sentiment
+                sentiment = self._get_sentiment_from_keywords(found_keywords)
                 
                 all_news.append({
                     "ticker": "WATCHLIST",
                     "title": title,
                     "url": url,
-                    "sentiment": "Bullish" if any(k in ["order", "win", "contract", "surge"] for k in found_keywords) else "Neutral",
-                    "time": "Recent"
+                    "sentiment": sentiment,
+                    "time": item.get('time', 'Recent')
                 })
+        
+        # ─── MODE 3: ALWAYS RUN (General Market News) ─────────────────
+        # This ensures news is always fetched even with no positions or watchlist
+        if not open_trades and not watchlist:
+            # Fetch general market news - no specific ticker needed
+            general_queries = [
+                "India stock market news today",
+                "Nifty 50 Sensex latest news",
+                "RBI monetary policy news India"
+            ]
+            for query in general_queries:
+                results = await self._fetch_news(query, state, manager)
+                for item in results:
+                    title = self._safe_get(item, ['title', 'text'])
+                    url = self._safe_get(item, ['url', 'link', 'href'])
+                    
+                    # Skip duplicates
+                    headline_key = title.lower().strip()
+                    if headline_key in seen_headlines:
+                        continue
+                    seen_headlines.add(headline_key)
+                    
+                    found_keywords = self._check_keywords(title)
+                    sentiment = self._get_sentiment_from_keywords(found_keywords)
+                    
+                    all_news.append({
+                        "ticker": "MARKET",
+                        "title": title,
+                        "url": url,
+                        "sentiment": sentiment,
+                        "time": item.get('time', 'Just now')
+                    })
+        
+        # Sort by time (most recent first) - handled in _fetch_ddgs
+        # Also sort by sentiment priority (Bullish/Bearish first, then Neutral)
+        sentiment_priority = {"Bullish": 0, "Bearish": 0, "Neutral": 1}
+        all_news.sort(key=lambda x: (sentiment_priority.get(x.get('sentiment', 'Neutral'), 1), x.get('time', '')))
         
         # Broadcast the unified feed to the Sentinel UI component
         if manager and all_news:
@@ -204,6 +270,29 @@ class SentinelService:
             })
         
         return all_news
+
+    def _get_sentiment_from_keywords(self, keywords: set) -> str:
+        """
+        Keyword-based sentiment analysis - NO AI needed.
+        Returns "Bullish", "Bearish", or "Neutral" based on keyword matching.
+        """
+        positive_keywords = {"order", "win", "contract", "awarded", "merger", "acquisition", 
+                           "surge", "surge", "growth", "profit", "boost", "rally", "gain",
+                           "record", "high", "upgrade", "outperform", "buy"}
+        negative_keywords = {"probe", "fraud", "scam", "penalty", "default", "bankruptcy", 
+                          "crash", "plunge", "cut", "downgrade", "ban", "regulatory",
+                          "sanctions", "war", "tariff", "recession", "crisis", "loss"}
+        
+        has_positive = bool(keywords & positive_keywords)
+        has_negative = bool(keywords & negative_keywords)
+        
+        if has_positive and not has_negative:
+            return "Bullish"
+        elif has_negative and not has_positive:
+            return "Bearish"
+        elif has_positive and has_negative:
+            return "Neutral"  # Mixed signals
+        return "Neutral"
 
     async def _fetch_news(self, query: str, state=None, manager=None):
         """
@@ -222,7 +311,11 @@ class SentinelService:
             return []
 
     async def _fetch_ddgs(self, query: str):
-        """Fetch news using DDGS with thread safety and safe field extraction."""
+        """Fetch news using DDGS with thread safety and safe field extraction.
+        
+        FIXED: Removed invalid (after:24h) parameter. DuckDuckGo doesn't support this syntax.
+        Instead, we fetch more results and filter locally by date.
+        """
         import os
         if os.getenv("SIMULATION", "false").lower() == "true":
             return [
@@ -234,8 +327,8 @@ class SentinelService:
                 from datetime import datetime, timedelta
                 with _ddgs_lock:
                     with DDGS() as ddgs:
-                        # Force (after:24h) in query and also filter locally
-                        results = list(ddgs.news(query, region="in-en", max_results=20))
+                        # FIXED: Removed (after:24h) - use plain query
+                        results = list(ddgs.news(query, region="in-en", max_results=30))
                         processed = []
                         for r in results:
                             title = self._safe_get(r, ['title', 'text'], 'No Title')
@@ -256,7 +349,7 @@ class SentinelService:
                                 if today_prefix not in date_str and yesterday_prefix not in date_str:
                                     is_old = True
                             
-                            # Relative time keywords
+                            # Relative time keywords - check for recent
                             recent_keywords = ["hour", "minute", "now", "just", "h ago", "m ago", "seconds"]
                             is_recent_text = any(k in date_str.lower() for k in recent_keywords)
                             
@@ -273,7 +366,37 @@ class SentinelService:
                             
                             if not is_old:
                                 processed.append({"title": title, "url": url, "time": date_str})
-                        return processed
+                        
+                        # Sort by time - more recent first
+                        def get_sort_time(item):
+                            date_str = item.get('time', '')
+                            now = datetime.now()
+                            
+                            # Check for relative times
+                            date_lower = date_str.lower()
+                            if 'just' in date_lower or 'minute' in date_lower or 'second' in date_lower:
+                                return now
+                            if 'hour' in date_lower or 'h ago' in date_lower:
+                                try:
+                                    hrs = int(''.join(filter(str.isdigit, date_str)) or '1')
+                                    return now - timedelta(hours=hrs)
+                                except:
+                                    return now - timedelta(hours=1)
+                            if 'day' in date_lower:
+                                try:
+                                    days = int(''.join(filter(str.isdigit, date_str)) or '1')
+                                    return now - timedelta(days=days)
+                                except:
+                                    return now - timedelta(days=1)
+                            
+                            # Try ISO format
+                            try:
+                                return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                            except:
+                                return now - timedelta(days=2)  # Old unknown dates go last
+                        
+                        processed.sort(key=get_sort_time, reverse=True)
+                        return processed[:15]  # Return top 15 most recent
             
             return await asyncio.to_thread(sync_fetch)
         except Exception as e:

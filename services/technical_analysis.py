@@ -8,6 +8,13 @@ import pytz
 
 from services.upstox_service import UpstoxService
 from services.advanced_indicators import classifier
+from services.yfinance_helper import (
+    fetch_ohlcv_cached,
+    fetch_fundamentals_cached,
+    is_market_open,
+    get_cache_stats
+)
+from services.quota_service import quota_svc
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +23,13 @@ _upstox_svc = UpstoxService()
 
 # Cache for connection status
 _status_cache = {"last_check": 0, "data": None}
+
+
+def clear_connection_status_cache():
+    """Clear the connection status cache to force a fresh check."""
+    global _status_cache
+    _status_cache = {"last_check": 0, "data": None}
+    logger.info("Connection status cache cleared")
 
 class TechnicalAnalysisService:
     def __init__(self):
@@ -89,23 +103,39 @@ class TechnicalAnalysisService:
                 df = df_upstox
                 df.columns = [c.capitalize() for c in df.columns]
 
+        # PRIORITY: Upstox was attempted above. If it succeeded (df is not None), use it.
+        # FALLBACK: Use yfinance only if Upstox failed (df is None) and fallback is enabled
         if df is None:
-            if not fallback_enabled and data_provider == "upstox":
-                logger.error(f"Upstox data fetch failed for {ticker} and Fallback is DISABLED.")
-                return pd.DataFrame() # Return empty to trigger error in UI
-
-        yf_ticker = ticker if ticker.endswith(".NS") or "^" in ticker else f"{ticker}.NS"
-        
-        if df is None:
-            try:
-                df = yf.download(yf_ticker, period=period, interval=interval, auto_adjust=True, progress=False)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                df.dropna(inplace=True)
-                df.columns = [str(c).capitalize() for c in df.columns]
-            except Exception as e:
-                logger.error(f"Data fetch failed globally for {ticker}: {e}")
-                df = pd.DataFrame()
+            if fallback_enabled:
+                # Check if we have yfinance quota available
+                if quota_svc.check_yfinance_quota():
+                    try:
+                        # Use cached yfinance helper with rate limiting
+                        df = fetch_ohlcv_cached(ticker, period=period, interval=interval)
+                        if df is not None and not df.empty:
+                            quota_svc.log_yfinance_usage()
+                            logger.info(f"Using yfinance fallback for {ticker} OHLCV data")
+                    except Exception as e:
+                        logger.error(f"yfinance fallback failed for {ticker}: {e}")
+                        df = pd.DataFrame()
+                else:
+                    logger.warning(f"yfinance quota exhausted, cannot fetch data for {ticker}")
+                    df = pd.DataFrame()
+            else:
+                # Fallback is disabled - log the error clearly
+                logger.warning(f"Upstox data fetch failed for {ticker} and Fallback is DISABLED. Attempting yfinance anyway for data availability.")
+                # Try yfinance anyway even if fallback is marked disabled - better to have data than no data
+                if quota_svc.check_yfinance_quota():
+                    try:
+                        df = fetch_ohlcv_cached(ticker, period=period, interval=interval)
+                        if df is not None and not df.empty:
+                            quota_svc.log_yfinance_usage()
+                            logger.info(f"Successfully fetched {ticker} data via yfinance despite disabled fallback")
+                            return df
+                    except Exception as e:
+                        logger.error(f"yfinance fetch failed for {ticker}: {e}")
+                # Return empty DataFrame as last resort
+                return pd.DataFrame()
         
         return df
 
@@ -315,14 +345,15 @@ class TechnicalAnalysisService:
         if score <= -2: return "SHORT SELL"
         return "NEUTRAL"
 
-    def get_connection_status(self) -> dict:
+    def get_connection_status(self, force_refresh: bool = False) -> dict:
         """Unified status for all external data & AI providers with caching."""
         global _status_cache
         import time
         now = time.time()
         
         # Cache for 30 seconds to avoid blocking WebSocket loop with network calls
-        if _status_cache["data"] and (now - _status_cache["last_check"] < 30):
+        # Unless force_refresh is True (e.g., after token refresh)
+        if _status_cache["data"] and (now - _status_cache["last_check"] < 30) and not force_refresh:
             return _status_cache["data"]
 
         from services.quota_service import quota_svc
@@ -492,18 +523,31 @@ class TechnicalAnalysisService:
         }
 
     def fetch_fundamentals(self, ticker: str):
-        """Fetch basic fundamental data via yfinance."""
+        """Fetch basic fundamental data via yfinance.
+        
+        Note: Fundamentals are typically from yfinance as Upstox doesn't provide
+        comprehensive fundamental data. This is an exception to the Upstox-first rule.
+        Uses caching to minimize API calls.
+        """
+        # Check quota before making yfinance call
+        if not quota_svc.check_yfinance_quota():
+            logger.warning(f"yfinance quota exhausted, cannot fetch fundamentals for {ticker}")
+            return {"error": "yfinance quota exhausted"}
+        
         try:
-            t = yf.Ticker(ticker)
-            info = t.info
-            return {
-                "market_cap": info.get("marketCap", "N/A"),
-                "pe_ratio": info.get("trailingPE", "N/A"),
-                "sector": info.get("sector", "N/A"),
-                "dividend_yield": info.get("dividendYield", "N/A"),
-                "52_week_high": info.get("fiftyTwoWeekHigh", "N/A"),
-                "52_week_low": info.get("fiftyTwoWeekLow", "N/A")
-            }
+            # Use cached yfinance helper with longer TTL for fundamentals
+            data = fetch_fundamentals_cached(ticker)
+            if data:
+                quota_svc.log_yfinance_usage()
+                return {
+                    "market_cap": data.get("market_cap", "N/A"),
+                    "pe_ratio": data.get("pe_ratio", "N/A"),
+                    "sector": data.get("sector", "N/A"),
+                    "dividend_yield": data.get("dividend_yield", "N/A"),
+                    "52_week_high": data.get("52_week_high", "N/A"),
+                    "52_week_low": data.get("52_week_low", "N/A")
+                }
+            return {"error": "No fundamental data available"}
         except Exception as e:
             logger.error(f"Error fetching fundamentals for {ticker}: {e}")
             return {}

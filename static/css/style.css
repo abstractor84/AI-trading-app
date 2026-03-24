@@ -992,6 +992,9 @@ body {
     grid-template-columns: 1fr 1fr;
     gap: 12px;
     margin-top: 12px;
+    /* Ensure grid doesn't overflow container */
+    max-width: 100%;
+    overflow-x: hidden;
 }
 
 .input-group label {
@@ -1013,6 +1016,18 @@ body {
     border-radius: 6px;
     color: var(--text-primary);
     font-size: 13px;
+    /* Fix text overflow in selects */
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+/* Allow select to expand on focus to show full value */
+.input-group select:focus {
+    white-space: normal;
+    overflow: visible;
+    position: relative;
+    z-index: 100;
 }
 
 .input-group input:focus,

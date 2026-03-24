@@ -1,9 +1,19 @@
+"""
+News Sentiment Service
+Fetches and analyzes news for market sentiment. Enhanced with:
+- Dynamic time filtering based on open positions
+- Prioritized free news sources (Google RSS → DuckDuckGo → Tavily)
+- Comprehensive market-focused search keywords
+- Caching to reduce API calls
+"""
 import requests
 from bs4 import BeautifulSoup
 import logging
 import re
 import asyncio
 import threading
+import time
+from datetime import datetime, timedelta
 from google import genai
 import os
 import json
@@ -18,24 +28,134 @@ _ddgs_lock = threading.Lock()
 # Singleton QuotaService
 quota_svc = QuotaService()
 
+# ==============================================================================
+# CACHING MECHANISM
+# ==============================================================================
+MAX_CACHE_SIZE = 100  # Maximum number of cache entries
+CLEANUP_THRESHOLD = 80  # Trigger cleanup when cache reaches this size
 
 
-# Simple keyword lists for local sentiment scoring (used when Gemini is unavailable)
+class NewsCache:
+    """Simple in-memory cache for news results to reduce API calls."""
+    
+    def __init__(self, ttl_seconds: int = 900):  # 15 minutes default TTL
+        self._cache = {}
+        self._ttl = ttl_seconds
+    
+    def _maybe_cleanup(self):
+        """Remove oldest expired entries when cache exceeds size limit."""
+        if len(self._cache) >= MAX_CACHE_SIZE:
+            # Remove expired entries first
+            current_time = time.time()
+            expired_keys = [
+                k for k, v in self._cache.items()
+                if current_time - v['timestamp'] > self._ttl
+            ]
+            for key in expired_keys:
+                del self._cache[key]
+            
+            # If still over limit, remove oldest entries
+            if len(self._cache) >= CLEANUP_THRESHOLD:
+                sorted_keys = sorted(
+                    self._cache.keys(),
+                    key=lambda k: self._cache[k]['timestamp']
+                )
+                for key in sorted_keys[:len(self._cache) - MAX_CACHE_SIZE + 10]:
+                    del self._cache[key]
+    
+    def get(self, key: str) -> list | None:
+        """Get cached results if not expired."""
+        if key not in self._cache:
+            return None
+        entry = self._cache[key]
+        if time.time() - entry['timestamp'] > self._ttl:
+            del self._cache[key]
+            return None
+        logger.debug(f"Cache HIT for key: {key}")
+        return entry['data']
+    
+    def set(self, key: str, data: list):
+        """Store results in cache with timestamp."""
+        # Trigger cleanup if needed before adding new entry
+        self._maybe_cleanup()
+        self._cache[key] = {
+            'data': data,
+            'timestamp': time.time()
+        }
+        logger.debug(f"Cache SET for key: {key}")
+    
+    def clear(self):
+        """Clear all cached data."""
+        self._cache.clear()
+
+# Global news cache instance
+news_cache = NewsCache(ttl_seconds=900)  # 15 minutes cache
+
+# ==============================================================================
+# MARKET-FOCUSED SEARCH KEYWORDS
+# ==============================================================================
+# Keywords for global/national factors that affect Indian markets
+MARKET_KEYWORDS = [
+    # War/conflicts, geopolitical
+    "war", "conflict", "geopolitical tension", "crude oil", "OPEC",
+    "Russia Ukraine", "Middle East", "Israel Gaza",
+    
+    # US Federal Reserve
+    "Fed", "Federal Reserve", "US Federal Reserve", "FOMC", "interest rate Fed",
+    "US inflation", "US CPI", "US jobs report",
+    
+    # RBI (India)
+    "RBI", "Reserve Bank of India", "RBI policy", "RBI rate", "RBI governor",
+    
+    # Political news affecting markets
+    "election", "budget", "government policy", "parliament",
+    
+    # Stock market news
+    "NSE", "BSE", "Sensex", "Nifty", "stock market", "Indian stock market",
+    "stock market today", "market rally", "market crash",
+    
+    # Corporate earnings
+    "quarterly results", "earnings", "Q4 results", "revenue growth",
+    "Infosys", "TCS", "Reliance", "Wipro", "HDFC", "ICICI", "SBI",
+    
+    # Tax, budget, economic policy
+    "GST", "tax", "customs duty", "budget 2024", "budget 2025",
+    "economic policy", "fiscal deficit",
+    
+    # Inflation, interest rates
+    "inflation", "CPI", "WPI", "interest rates", "repo rate",
+    "reverse repo", "monetary policy",
+    
+    # Market sentiment, crisis events
+    "market sentiment", "FII", "DII", "foreign investors", "domestic investors",
+    "banking crisis", "default", "bankruptcy", "loan default",
+    "global market", "US market", "Wall Street", "Dow Jones", "NASDAQ",
+    "Asian markets", "China market", "Japan market",
+]
+
+def _build_market_query() -> str:
+    """Build a comprehensive query for market-wide news."""
+    return " OR ".join(MARKET_KEYWORDS[:15])  # Limit to prevent overly long queries
+
+# ==============================================================================
+# SENTIMENT SCORING KEYWORDS
+# ==============================================================================
 _POSITIVE_WORDS = {
     'surge', 'jump', 'rally', 'gain', 'rise', 'up', 'record', 'high', 'profit',
     'growth', 'beat', 'strong', 'bullish', 'upgraded', 'outperform', 'buy', 'positive',
-    'good', 'excellent', 'awarded', 'wins', 'launch', 'expands', 'deal', 'partnership'
+    'good', 'excellent', 'awarded', 'wins', 'launch', 'expands', 'deal', 'partnership',
+    'boost', 'soar', 'skyrocket', 'breakout', 'momentum'
 }
 _NEGATIVE_WORDS = {
     'fall', 'drop', 'crash', 'decline', 'down', 'loss', 'weak', 'sell', 'bear',
     'bearish', 'cut', 'downgrade', 'underperform', 'fraud', 'penalty', 'ban',
-    'concern', 'risk', 'miss', 'slump', 'plunge', 'warning', 'probe', 'fine'
+    'concern', 'risk', 'miss', 'slump', 'plunge', 'warning', 'probe', 'fine',
+    'sink', 'plummet', 'tumble', 'recession', 'crisis', 'panic', 'selloff'
 }
 
 def _keyword_sentiment(headlines: list) -> dict:
     """Fast local keyword-based sentiment — used when Gemini is unavailable."""
     pos = neg = 0
-    # Handle list of strings or list of dicts
     titles = [h['title'] if isinstance(h, dict) else h for h in headlines]
     for h in titles:
         words = set(re.findall(r'\b\w+\b', h.lower()))
@@ -44,8 +164,8 @@ def _keyword_sentiment(headlines: list) -> dict:
     total = pos + neg
     if total == 0:
         return {"score": 50, "label": "Neutral", "sentiment": "NEUTRAL",
-                "reason": "No sentiment keywords found"}
-    score = int((pos / total) * 100)  # 0=bearish, 100=bullish
+                "reason": "No sentiment keywords found", "positive": 0, "negative": 0}
+    score = int((pos / total) * 100)
     if score >= 60:
         label, sentiment = "Bullish", "POSITIVE"
     elif score <= 40:
@@ -53,111 +173,307 @@ def _keyword_sentiment(headlines: list) -> dict:
     else:
         label, sentiment = "Neutral", "NEUTRAL"
     return {"score": score, "label": label, "sentiment": sentiment,
-            "reason": f"Keyword scan: {pos} positive, {neg} negative signals"}
+            "reason": f"Keyword scan: {pos} positive, {neg} negative signals",
+            "positive": pos, "negative": neg}
 
 
-def _rss_fetch(clean_ticker: str) -> list[dict]:
-    """Fetch from Google News RSS."""
-    url = f"https://news.google.com/rss/search?q={clean_ticker}+NSE+stock&hl=en-IN&gl=IN&ceid=IN:en"
+# ==============================================================================
+# RSS FETCH (PRIMARY SOURCE - FREE, NO RATE LIMITS)
+# ==============================================================================
+def _rss_fetch(query: str, max_results: int = 20) -> list[dict]:
+    """Fetch from Google News RSS - primary free source."""
+    # Use URL-encoded query
+    encoded_query = requests.utils.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-IN&gl=IN&ceid=IN:en"
+    
     try:
-        response = requests.get(url, timeout=6)
+        response = requests.get(url, timeout=8)
+        if response.status_code != 200:
+            logger.warning(f"RSS fetch failed with status {response.status_code}")
+            return []
+        
         soup = BeautifulSoup(response.content, features="xml")
-        return [{"title": item.title.text, "url": item.link.text} for item in soup.find_all("item")[:5]]
+        items = soup.find_all("item")[:max_results]
+        
+        results = []
+        for item in items:
+            try:
+                title = item.title.text if item.title else "No Title"
+                link = item.link.text if item.link else "#"
+                # Try to extract pubDate for time filtering
+                pub_date = None
+                if item.pubDate:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        pub_date = parsedate_to_datetime(item.pubDate.text)
+                    except:
+                        pass
+                results.append({
+                    "title": title,
+                    "url": link,
+                    "pub_date": pub_date.isoformat() if pub_date else None,
+                    "source": "google_rss"
+                })
+            except Exception as e:
+                logger.debug(f"Error parsing RSS item: {e}")
+                continue
+        return results
     except Exception as e:
-        logger.error(f"RSS fetch failed for {clean_ticker}: {e}")
+        logger.error(f"RSS fetch failed: {e}")
         return []
 
 
-def _tavily_fetch(query: str) -> list[dict]:
-    tavily_key = os.getenv("TAVILY_API_KEY")
-    if not tavily_key:
-        return []
-    try:
-        from tavily import TavilyClient
-        res = TavilyClient(api_key=tavily_key).search(query=query, search_depth="basic", max_results=20)
-        return [{"title": r['title'], "url": r['url']} for r in res.get('results', [])]
-    except Exception as e:
-        logger.error(f"Tavily fetch failed: {e}")
-    return []
-
-
-def _ddgs_fetch(query: str) -> list[dict]:
+# ==============================================================================
+# DUCKDUCKGO FETCH (SECONDARY SOURCE - FREE)
+# ==============================================================================
+def _ddgs_fetch(query: str, max_results: int = 20) -> list[dict]:
     """Synchronous wrapper for DDGS news fetching with thread safety."""
     try:
         from duckduckgo_search import DDGS
         with _ddgs_lock:
             with DDGS() as ddgs:
-                # Use news() — more targeted for financial news than text()
-                results = list(ddgs.news(query, max_results=20))
+                # Use news() — more targeted for financial news
+                results = list(ddgs.news(query, max_results=max_results))
                 if results:
-                    # Safe Extraction with Fallbacks
-                    return [{"title": r.get('title', 'No Title'), "url": r.get('link', r.get('url', '#'))} for r in results]
-                # fallback: broader text search without timelimit
-                results = list(ddgs.text(query, max_results=20))
-                return [{"title": r.get('title', 'No Title'), "url": r.get('href', r.get('link', '#'))} for r in results]
+                    return [{
+                        "title": r.get('title', 'No Title'),
+                        "url": r.get('link', r.get('url', '#')),
+                        "date": r.get('date'),
+                        "source": "duckduckgo"
+                    } for r in results]
+                # Fallback: broader text search
+                results = list(ddgs.text(query, max_results=max_results))
+                return [{
+                    "title": r.get('title', 'No Title'),
+                    "url": r.get('href', r.get('link', '#')),
+                    "date": None,
+                    "source": "duckduckgo"
+                } for r in results]
     except Exception as e:
-        logger.error(f"SKEPTIC: DDGS fetch failed for {query}: {e}")
+        logger.error(f"DDGS fetch failed for {query}: {e}")
     return []
 
 
+# ==============================================================================
+# TAVILY FETCH (FALLBACK ONLY - RATE LIMITED)
+# ==============================================================================
+def _tavily_fetch(query: str, max_results: int = 20) -> list[dict]:
+    """Fetch from Tavily - fallback only, has rate limits."""
+    tavily_key = os.getenv("TAVILY_API_KEY")
+    if not tavily_key:
+        logger.debug("TAVILY_API_KEY not found, skipping Tavily")
+        return []
+    try:
+        from tavily import TavilyClient
+        res = TavilyClient(api_key=tavily_key).search(
+            query=query, 
+            search_depth="basic", 
+            max_results=max_results
+        )
+        return [{
+            "title": r['title'],
+            "url": r['url'],
+            "date": r.get('published_date'),
+            "source": "tavily"
+        } for r in res.get('results', [])]
+    except Exception as e:
+        logger.error(f"Tavily fetch failed: {e}")
+    return []
+
+
+# ==============================================================================
+# TIME FILTERING
+# ==============================================================================
+def _filter_by_time(news_items: list[dict], hours: int) -> list[dict]:
+    """Filter news items by time window (in hours)."""
+    if not news_items:
+        return []
+    
+    now = datetime.now()
+    cutoff = now - timedelta(hours=hours)
+    
+    filtered = []
+    for item in news_items:
+        # Try to parse the date
+        pub_date = item.get('pub_date') or item.get('date')
+        if pub_date:
+            try:
+                if isinstance(pub_date, str):
+                    # Try various date formats
+                    for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                        try:
+                            pub_date = datetime.strptime(pub_date, fmt)
+                            break
+                        except:
+                            continue
+                if pub_date and pub_date >= cutoff:
+                    filtered.append(item)
+            except Exception:
+                # If date parsing fails, include the item
+                filtered.append(item)
+        else:
+            # No date available - include it (better than losing news)
+            filtered.append(item)
+    
+    return filtered
+
+
+def _sort_by_date(news_items: list[dict], descending: bool = True) -> list[dict]:
+    """Sort news items by date."""
+    def get_date(item):
+        pub_date = item.get('pub_date') or item.get('date')
+        if pub_date:
+            try:
+                if isinstance(pub_date, str):
+                    for fmt in ['%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                        try:
+                            return datetime.strptime(pub_date, fmt)
+                        except:
+                            continue
+                return pub_date
+            except:
+                return datetime.min
+        return datetime.min
+    
+    return sorted(news_items, key=get_date, reverse=descending)
+
+
+# ==============================================================================
+# MAIN SERVICE CLASS
+# ==============================================================================
 class NewsSentimentService:
+    """
+    News Sentiment Service with:
+    - Dynamic time filtering based on open positions
+    - Prioritized free news sources
+    - Caching to reduce API calls
+    - Market-focused search keywords
+    """
+    
+    # Default time windows (in hours)
+    HOURS_WITH_POSITIONS = 10  # More urgent - last 10 hours
+    HOURS_NO_POSITIONS = 36    # Less urgent - last 36 hours
+    
+    # Background run interval (in seconds)
+    BACKGROUND_INTERVAL = 900  # 15 minutes
+    
     def __init__(self):
         self.google_key = os.getenv("GEMINI_API_KEY")
         self.groq_key = os.getenv("GROQ_API_KEY")
         self.samba_key = os.getenv("SAMBA_API_KEY")
         self.tavily_key = os.getenv("TAVILY_API_KEY")
+        
+        # Background task state
+        self._background_task = None
+        self._last_background_news = None
+        self._background_running = False
 
         if self.google_key:
-            self.google_client = genai.Client(api_key=self.google_key, http_options={'headers': {'X-Goog-Api-Client': 'genai-local'}}) 
+            self.google_client = genai.Client(
+                api_key=self.google_key, 
+                http_options={'headers': {'X-Goog-Api-Client': 'genai-local'}}
+            )
         else:
             self.google_client = None
 
         if not self.tavily_key:
-            logger.warning("TAVILY_API_KEY not found in .env. Tavily search will be skipped.")
+            logger.warning("TAVILY_API_KEY not found. Tavily will be used as fallback only.")
 
     async def fetch_news_async(self, query: str) -> list[dict]:
         """Asynchronous entry point for DDGS fetching."""
         return await asyncio.to_thread(_ddgs_fetch, query)
 
-    def fetch_news(self, ticker: str, search_engine: str = "gemini", fallback: bool = False) -> list[dict]:
+    def fetch_news(
+        self, 
+        ticker: str = None, 
+        search_engine: str = "rss", 
+        fallback: bool = True,
+        hours: int = None,
+        use_cache: bool = True
+    ) -> list[dict]:
         """
-        Fetch news headlines.
-        fallback=False (default): fail fast — only use the selected engine.
-        fallback=True: cascade through available engines until one succeeds.
+        Fetch news headlines with prioritized sources.
+        
+        Priority order (new):
+        1. Google RSS (free, no rate limits) - PRIMARY
+        2. DuckDuckGo (free) - SECONDARY  
+        3. Tavily (rate limited) - FALLBACK ONLY
+        
+        Args:
+            ticker: Stock ticker (e.g., "RELIANCE")
+            search_engine: Legacy parameter, now uses prioritized sources
+            fallback: If True, cascade through sources on failure
+            hours: Time window filter (10h with positions, 36h without)
+            use_cache: Whether to use cached results
+        
+        Returns:
+            List of news items with title, url, source, pub_date
         """
-        clean_ticker = ticker.replace(".NS", "")
-        query = f"{clean_ticker} NSE India stock market news today"
+        # Build query
+        if ticker:
+            clean_ticker = ticker.replace(".NS", "").replace("^NS", "")
+            query = f"{clean_ticker} NSE India stock market news today"
+        else:
+            query = _build_market_query()
+        
+        # Check cache first
+        cache_key = f"news_{query}_{hours or 'default'}"
+        if use_cache:
+            cached = news_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        
+        # Try sources in priority order: RSS → DDGS → Tavily
+        headlines = []
+        
+        # 1. Try Google RSS first (primary - free, no rate limits)
+        headlines = _rss_fetch(query, max_results=25)
+        if headlines:
+            logger.info(f"RSS fetched {len(headlines)} items for query: {query[:50]}...")
+        elif fallback:
+            # 2. Try DuckDuckGo (secondary - free)
+            logger.info(f"RSS empty. Trying DuckDuckGo for: {query[:50]}...")
+            headlines = _ddgs_fetch(query, max_results=25)
+            if headlines:
+                logger.info(f"DDGS fetched {len(headlines)} items")
+            else:
+                # 3. Try Tavily only as last resort
+                logger.info(f"DDGS empty. Trying Tavily as fallback...")
+                headlines = _tavily_fetch(query, max_results=25)
+                if headlines:
+                    logger.info(f"Tavily fetched {len(headlines)} items")
+        
+        # Apply time filtering if hours specified
+        if hours and headlines:
+            headlines = _filter_by_time(headlines, hours)
+            # Sort by date (newest first)
+            headlines = _sort_by_date(headlines, descending=True)
+        
+        # Cache results
+        if headlines and use_cache:
+            news_cache.set(cache_key, headlines)
+        
+        return headlines
 
-        if search_engine == "tavily":
-            headlines = _tavily_fetch(query)
-            if headlines or not fallback:
-                return headlines
-            logger.info(f"Tavily empty for {ticker}. Fallback enabled — trying DDGS.")
-            headlines = _ddgs_fetch(query)
-            if headlines or not fallback:
-                return headlines
-            logger.info(f"DDGS empty for {ticker}. Falling back to RSS.")
-            return _rss_fetch(clean_ticker)
+    def fetch_market_news(self, has_open_positions: bool = False) -> list[dict]:
+        """
+        Fetch market-wide news with dynamic time filtering.
+        
+        Args:
+            has_open_positions: If True, use 10h window. If False, use 36h window.
+        
+        Returns:
+            Filtered and sorted news list
+        """
+        hours = self.HOURS_WITH_POSITIONS if has_open_positions else self.HOURS_NO_POSITIONS
+        return self.fetch_news(ticker=None, hours=hours, fallback=True)
 
-        elif search_engine == "ddgs":
-            headlines = _ddgs_fetch(query)
-            if headlines or not fallback:
-                return headlines
-            logger.info(f"DDGS empty for {ticker}. Fallback enabled — trying RSS.")
-            return _rss_fetch(clean_ticker)
-
-        else:  # gemini / default = RSS
-            headlines = _rss_fetch(clean_ticker)
-            if headlines or not fallback:
-                return headlines
-            logger.info(f"RSS empty for {ticker}. Fallback enabled — trying DDGS.")
-            headlines = _ddgs_fetch(query)
-            if headlines or not fallback:
-                return headlines
-            logger.info(f"DDGS empty for {ticker}. Falling back to Tavily.")
-            return _tavily_fetch(query)
-
-    def score_sentiment(self, headlines: list, provider: str = "google", model_name: str = "gemini-3.1-pro") -> dict:
+    def score_sentiment(
+        self, 
+        headlines: list, 
+        provider: str = "google", 
+        model_name: str = "gemini-3.1-pro"
+    ) -> dict:
         """Score news sentiment using the user's selected AI provider."""
         if not headlines:
             return {"sentiment": "NEUTRAL", "reason": "No news found"}
@@ -225,7 +541,6 @@ class NewsSentimentService:
         quota_svc.log_usage(model_name, tokens=tokens)
         
         content = jdoc["choices"][0]["message"]["content"]
-        # Basic JSON clean if enclosed in markdown
         if content.startswith("```json"):
             content = content.replace("```json\n", "").replace("```", "")
         return json.loads(content)
@@ -254,3 +569,76 @@ class NewsSentimentService:
             content = content.replace("```json\n", "").replace("```", "")
         return json.loads(content)
 
+    # ==============================================================================
+    # BACKGROUND NEWS FETCHING
+    # ==============================================================================
+    async def start_background_fetch(self, state, manager, interval: int = None):
+        """
+        Start background news fetching service.
+        Runs periodically regardless of market hours.
+        
+        Args:
+            state: AppState instance for checking open positions
+            manager: WebSocket manager for broadcasting
+            interval: Fetch interval in seconds (default: 15 minutes)
+        """
+        if self._background_running:
+            logger.warning("Background news service already running")
+            return
+        
+        self._background_running = True
+        interval = interval or self.BACKGROUND_INTERVAL
+        logger.info(f"Starting background news service (interval: {interval}s)")
+        
+        while self._background_running:
+            try:
+                # Check if there are open positions
+                has_positions = len(getattr(state, 'open_trades', [])) > 0
+                
+                # Fetch market news with appropriate time window
+                news = await asyncio.to_thread(
+                    self.fetch_market_news, 
+                    has_open_positions=has_positions
+                )
+                
+                if news:
+                    # Score sentiment
+                    sentiment = _keyword_sentiment(news[:10])  # Score top 10 headlines
+                    
+                    # Store in state for UI access
+                    state.last_market_news = {
+                        "headlines": news[:20],  # Keep top 20
+                        "sentiment": sentiment,
+                        "has_open_positions": has_positions,
+                        "hours_filtered": self.HOURS_WITH_POSITIONS if has_positions else self.HOURS_NO_POSITIONS,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    # Broadcast to connected clients
+                    await manager.broadcast({
+                        "type": "market_news",
+                        "data": state.last_market_news
+                    })
+                    
+                    logger.info(f"Background news: {len(news)} items, sentiment: {sentiment['label']}")
+                else:
+                    logger.debug("Background news: No news fetched")
+                    
+            except Exception as e:
+                logger.error(f"Background news fetch error: {e}", exc_info=True)
+            
+            # Sleep until next interval
+            await asyncio.sleep(interval)
+    
+    def stop_background_fetch(self):
+        """Stop the background news fetching service."""
+        self._background_running = False
+        logger.info("Background news service stopped")
+
+
+# ==============================================================================
+# LEGACY FUNCTIONS (for backward compatibility)
+# ==============================================================================
+def _keyword_sentiment_legacy(headlines: list) -> dict:
+    """Legacy wrapper for backward compatibility."""
+    return _keyword_sentiment(headlines)

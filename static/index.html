@@ -93,6 +93,12 @@
             <span class="ds-value ds-quota-text" id="ds-quota-text">0/7</span>
         </div>
     </div>
+    
+    <!-- Holiday Alert Banner (shown below P&L section) -->
+    <div id="holiday-alert-banner" class="holiday-alert-banner" style="display: none;">
+        <span class="holiday-icon">🏖️</span>
+        <span id="holiday-alert-message" class="holiday-message"></span>
+    </div>
 
     <!-- Main Dashboard -->
     <div id="page-dashboard" class="page-content active">
@@ -180,6 +186,20 @@
                                 <option value="yfinance">Yahoo Finance</option>
                             </select>
                             <label class="fallback-toggle"><input type="checkbox" id="fallback-data-input" checked> Fallback</label>
+                            <div id="data-provider-status" class="provider-status">
+                                <span class="provider-badge active" id="provider-active-badge">● Active</span>
+                                <span class="provider-badge fallback" id="provider-fallback-badge" style="display:none;">↻ Fallback</span>
+                            </div>
+                            <div class="quota-display" id="data-quota-display">
+                                <div class="quota-item">
+                                    <span class="quota-label">Upstox:</span>
+                                    <span class="quota-value" id="upstox-quota">∞</span>
+                                </div>
+                                <div class="quota-item">
+                                    <span class="quota-label">YFinance:</span>
+                                    <span class="quota-value" id="yfinance-quota">--/100</span>
+                                </div>
+                            </div>
                         </div>
                         <div class="input-group">
                             <label>Search</label>

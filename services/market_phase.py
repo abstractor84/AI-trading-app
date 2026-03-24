@@ -147,7 +147,7 @@ _PHASE_GUIDANCE = {
 # When to call AI and what type of prompt to use
 _AI_SCHEDULE = {
     MarketPhase.PRE_MARKET_SETUP: {
-        "call_interval_mins": 0,  
+        "call_interval_mins": 30,
         "prompt_type": "SCAN",
         "description": "Gap analysis and global cues review",
     },

@@ -83,7 +83,9 @@ async def test_maybe_call_ai_scan(bg_engine, state):
         mock_fund.return_value = {"pe_ratio": 20}
         mock_sig.return_value = "STRONG BUY"
         mock_scan.return_value = [{"ticker": "K1", "action": "BUY", "confidence": 0.9}]
-        mock_news.return_value.fetch_news.return_value = [{"title": "Good News"}]
+        mock_news_instance = MagicMock()
+        mock_news_instance.fetch_news.return_value = [{"title": "Good News"}]
+        mock_news.return_value = mock_news_instance
         
         await bg_engine._maybe_call_ai(phase_ctx)
         
@@ -177,7 +179,9 @@ async def test_maybe_call_ai_consensus_fail(bg_engine, state):
         }
         mock_sig.return_value = "STRONG SHORT SELL" # TA says SHORT SELL
         mock_scan.return_value = [{"ticker": "K1", "action": "BUY"}] # AI says BUY
-        mock_news.return_value.fetch_news.return_value = []
+        mock_news_instance = MagicMock()
+        mock_news_instance.fetch_news.return_value = []
+        mock_news.return_value = mock_news_instance
         
         await bg_engine._maybe_call_ai(phase_ctx)
         
@@ -218,7 +222,7 @@ async def test_run_one_iteration_full(bg_engine, state, manager):
             "mins_to_close": 300,
             "phase_label": "Test Phase"
         }
-        mock_glob.return_value = {"india": {"NIFTY 50": {"value": 22000, "change_pct": 0.5}}}
+        mock_glob.return_value = {"india": {"Nifty 50": {"value": 22000, "change_pct": 0.5}}}
         
         try:
             await bg_engine.run()

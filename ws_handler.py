@@ -2,9 +2,11 @@
 WebSocket Handler (V2)
 Handles all WebSocket connections and command routing.
 Extracted from the monolithic main.py for clean separation of concerns.
+Enhanced with rate limit handling and graceful degradation.
 """
 import json
 import asyncio
+import threading
 import logging
 import pandas as pd
 from datetime import datetime
@@ -12,11 +14,56 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from services.risk_engine import risk_engine
 from services.market_phase import market_phase_svc
+from services.sentinel_service import sentinel_svc
 
 logger = logging.getLogger(__name__)
 
 
+# Rate limit state for WebSocket broadcast
+_rate_limit_broadcast_state = {
+    "last_broadcast_time": 0,
+    "broadcast_count": 0,
+    "rate_limited": False,
+    "rate_limit_until": 0
+}
 
+# Thread lock for rate limit state (thread-safety)
+_rate_limit_lock = threading.Lock()
+
+# Rate limit constants
+RATE_LIMIT_WINDOW_MS = 1000  # 1 second window
+RATE_LIMIT_MAX_BROADCASTS = 10  # Max broadcasts per window
+RATE_LIMIT_COOLDOWN_MS = 5000  # 5 second cooldown when rate limited
+
+
+def check_broadcast_rate_limit():
+    """Check if we should rate limit broadcasts. Thread-safe."""
+    import time
+    current_time_ms = int(time.time() * 1000)
+    
+    with _rate_limit_lock:
+        if _rate_limit_broadcast_state["rate_limited"]:
+            if current_time_ms < _rate_limit_broadcast_state["rate_limit_until"]:
+                return True
+            else:
+                # Cooldown expired, reset
+                _rate_limit_broadcast_state["rate_limited"] = False
+                _rate_limit_broadcast_state["broadcast_count"] = 0
+        
+        # Check if we're exceeding the rate limit
+        if current_time_ms - _rate_limit_broadcast_state["last_broadcast_time"] < RATE_LIMIT_WINDOW_MS:
+            _rate_limit_broadcast_state["broadcast_count"] += 1
+            if _rate_limit_broadcast_state["broadcast_count"] > RATE_LIMIT_MAX_BROADCASTS:
+                _rate_limit_broadcast_state["rate_limited"] = True
+                _rate_limit_broadcast_state["rate_limit_until"] = current_time_ms + RATE_LIMIT_COOLDOWN_MS
+                logger.warning(f"Rate limiting broadcasts for {RATE_LIMIT_COOLDOWN_MS}ms")
+                return True
+        else:
+            # Reset counter for new window
+            _rate_limit_broadcast_state["broadcast_count"] = 1
+            _rate_limit_broadcast_state["last_broadcast_time"] = current_time_ms
+        
+        return False
 
 
 class ConnectionManager:
@@ -35,6 +82,12 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
+        """Broadcast message with rate limiting."""
+        # Skip if rate limited (but still log important messages)
+        if message.get("type") not in ["tick", "notification"] and check_broadcast_rate_limit():
+            logger.debug("Skipping broadcast due to rate limiting")
+            return
+        
         dead = []
         for conn in self.active_connections:
             try:
@@ -53,6 +106,13 @@ class ConnectionManager:
             from services.quota_service import quota_svc
             from services.holiday_service import holiday_svc
             
+            # Import rate limit status
+            try:
+                from services.upstox_service import get_rate_limit_status, is_rate_limited
+                rate_limit_status = get_rate_limit_status()
+            except ImportError:
+                rate_limit_status = {"is_rate_limited": False, "remaining_cooldown": 0}
+            
             ai_prov = getattr(state, 'ai_provider', 'google')
             try:
                 quota_status = quota_svc.check_quota(ai_prov)
@@ -62,6 +122,22 @@ class ConnectionManager:
             is_h, h_name = holiday_svc.is_holiday()
             upcoming = holiday_svc.get_upcoming_holiday()
 
+            # Get data provider quota info
+            data_provider = getattr(state, 'data_provider', 'upstox')
+            yfinance_quota = quota_svc.check_quota("yfinance")
+            upstox_quota = {"remaining_rpd": 5000, "limit_rpd": 5000, "used_rpd_pct": 0}  # Upstox has high limit
+            
+            # Determine which provider is active and fallback status
+            is_using_fallback = False
+            if data_provider == "yfinance" and not getattr(state, 'fallback_data', True):
+                is_using_fallback = False
+            elif data_provider == "yfinance":
+                # Check if yfinance quota is exhausted
+                is_using_fallback = not yfinance_quota.get("can_call", True)
+            
+            # Check if rate limited
+            is_rate_limited_data = is_rate_limited()
+            
             payload = {
                 "type": "state_update",
                 "capital": state.capital,
@@ -77,12 +153,24 @@ class ConnectionManager:
                 "connection_status": getattr(state, 'connection_status', {}),
                 "action_timeline": getattr(state, 'action_timeline', [])[-20:],
                 "search_engine": getattr(state, 'search_engine', 'tavily'),
-                "data_provider": getattr(state, 'data_provider', 'upstox'),
+                "data_provider": data_provider,
                 "fallback_data": getattr(state, 'fallback_data', True),
                 "fallback_search": getattr(state, 'fallback_search', True),
                 "fallback_ai": getattr(state, 'fallback_ai', True),
                 "ai_provider": getattr(state, 'ai_provider', 'google'),
                 "ai_model": getattr(state, 'ai_model', 'gemini-3.1-pro'),
+                "data_provider_quota": {
+                    "upstox": upstox_quota,
+                    "yfinance": yfinance_quota
+                },
+                "is_using_fallback": is_using_fallback,
+                "rate_limit_status": {
+                    "is_rate_limited": rate_limit_status.get("is_rate_limited", False),
+                    "remaining_cooldown": rate_limit_status.get("remaining_cooldown", 0),
+                    "consecutive_failures": rate_limit_status.get("consecutive_failures", 0)
+                },
+                "is_data_stale": is_rate_limited_data,  # Flag to show stale data indicator
+                "last_data_update": getattr(state, 'last_data_update', None),  # Timestamp of last successful data
                 "holiday_info": {
                     "is_holiday": is_h,
                     "holiday_name": h_name,
@@ -92,6 +180,53 @@ class ConnectionManager:
             await websocket.send_json(payload)
         except Exception as e:
             logger.error(f"SKEPTIC: send_state failed: {e}")
+
+    async def send_news(self, websocket: WebSocket, state):
+        """Send sentinel news to a newly connected client immediately.
+        
+        This ensures new clients get news right away without waiting for background cycle.
+        Similar to send_state() but for news data.
+        """
+        try:
+            watchlist_tickers = list(getattr(state, 'dashboard_watch_stocks', set()))
+            open_trades = getattr(state, 'open_trades', [])
+            # Pass manager=None to avoid broadcast, just get news returned
+            news = await sentinel_svc.check_alerts(open_trades, watchlist_tickers, state, manager=None)
+            if news:
+                await websocket.send_json({
+                    "type": "news_update",
+                    "data": {"headlines": news}
+                })
+                logger.info(f"Sentinel news sent to new client: {len(news)} items")
+            else:
+                logger.debug("No sentinel news available for new client")
+        except Exception as e:
+            logger.warning(f"Failed to send initial sentinel news: {e}")
+
+    async def send_market_data(self, websocket: WebSocket, state):
+        """Fetch global indices and send to a newly connected client immediately.
+        
+        This ensures new clients get market data right away without waiting for background cycle.
+        Similar pattern to send_news() - fetch data and send directly to new client.
+        """
+        try:
+            from services.stock_discovery import StockDiscoveryService
+            discovery_svc = StockDiscoveryService()
+            
+            # Fetch global indices (Nifty 50, India indices, VIX, US indices)
+            global_ctx = await asyncio.to_thread(discovery_svc.fetch_global_indices)
+            
+            if global_ctx:
+                # Send market data to the new client
+                await websocket.send_json({
+                    "type": "market_data",
+                    "global_context": global_ctx
+                })
+                logger.info(f"Market data sent to new client: keys={list(global_ctx.keys())}")
+            else:
+                logger.debug("No market data available for new client")
+        except Exception as e:
+            logger.warning(f"Failed to send initial market data: {e}")
 
     async def broadcast_state(self, state):
         """Broadcast updated state to all connected clients."""
@@ -110,6 +245,15 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
         logger.info("WebSocket connected and accepted")
         await manager.send_state(websocket, state)
         logger.info("Initial state sent successfully")
+        
+        # Send sentinel news immediately to new client (not just broadcast)
+        # This ensures new clients get news right away without waiting for background cycle
+        await manager.send_news(websocket, state)
+        
+        # Fetch and send market data immediately to new client
+        # This ensures new clients get market data (global indices) right away
+        # without waiting for background engine to run
+        await manager.send_market_data(websocket, state)
 
         while True:
             try:
@@ -122,25 +266,51 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                 break
 
             if action == "update_settings":
-                state.update_settings(
-                    float(command.get('capital', state.capital)),
-                    float(command.get('max_loss', state.max_loss_per_trade)),
-                    command.get('search_engine', state.search_engine),
-                    command.get('data_provider', state.data_provider),
-                    command.get('fallback_data', getattr(state, 'fallback_data', True)),
-                    command.get('fallback_search', getattr(state, 'fallback_search', True)),
-                    command.get('fallback_ai', getattr(state, 'fallback_ai', True)),
-                    command.get('ai_provider', getattr(state, 'ai_provider', 'google')),
-                    command.get('ai_model', getattr(state, 'ai_model', 'gemini-3.1-pro'))
-                )
+                try:
+                    success = state.update_settings(
+                        float(command.get('capital', state.capital)),
+                        float(command.get('max_loss', state.max_loss_per_trade)),
+                        command.get('search_engine', state.search_engine),
+                        command.get('data_provider', state.data_provider),
+                        command.get('fallback_data', getattr(state, 'fallback_data', True)),
+                        command.get('fallback_search', getattr(state, 'fallback_search', True)),
+                        command.get('fallback_ai', getattr(state, 'fallback_ai', True)),
+                        command.get('ai_provider', getattr(state, 'ai_provider', 'google')),
+                        command.get('ai_model', getattr(state, 'ai_model', 'gemini-3.1-pro'))
+                    )
+                    
+                    if success:
+                        logger.info(f"SKEPTIC: Settings saved - Capital: {state.capital}, Max Loss: {state.max_loss_per_trade}, AI: {state.ai_provider}/{state.ai_model}")
 
-                # Sync risk engine with new settings
-                risk_engine.update_config(
-                    state.capital,
-                    state.max_loss_per_trade,
-                    getattr(state, 'max_daily_loss', 5000.0)
-                )
-                await manager.send_state(websocket, state)
+                        # Sync risk engine with new settings
+                        risk_engine.update_config(
+                            state.capital,
+                            state.max_loss_per_trade,
+                            getattr(state, 'max_daily_loss', 5000.0)
+                        )
+                        
+                        # Send success notification to client
+                        await websocket.send_json({
+                            "type": "notification",
+                            "message": f"✅ Settings saved to database successfully!",
+                            "level": "success"
+                        })
+                        await manager.send_state(websocket, state)
+                    else:
+                        # Database commit failed
+                        logger.error("SKEPTIC: Failed to save settings - database commit failed")
+                        await websocket.send_json({
+                            "type": "notification",
+                            "message": f"⚠️ Failed to save settings: Database commit failed. Please try again.",
+                            "level": "error"
+                        })
+                except Exception as e:
+                    logger.error(f"SKEPTIC: Failed to save settings: {e}")
+                    await websocket.send_json({
+                        "type": "notification",
+                        "message": f"⚠️ Failed to save settings: {str(e)[:100]}",
+                        "level": "error"
+                    })
 
             elif action == "list_models":
                 provider = command.get("provider", "google")
@@ -155,7 +325,17 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
             elif action == "get_status":
                 from services.technical_analysis import TechnicalAnalysisService
                 ta_svc = TechnicalAnalysisService()
-                status = ta_svc.get_connection_status()
+                status = ta_svc.get_connection_status(force_refresh=True)
+                
+                # Add rate limit status
+                try:
+                    from services.upstox_service import get_rate_limit_status
+                    rate_limit = get_rate_limit_status()
+                    status["rate_limit"] = rate_limit
+                except ImportError:
+                    pass
+                
+                logger.info(f"SKEPTIC: Connection status refreshed - Upstox: {status.get('upstox', {}).get('connected')}")
                 await manager.broadcast({
                     "type": "connection_status",
                     "status": status
@@ -316,6 +496,20 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     })
                     return
                 
+                # Check if rate limited
+                try:
+                    from services.upstox_service import is_rate_limited, get_rate_limit_status
+                    if is_rate_limited():
+                        status = get_rate_limit_status()
+                        await websocket.send_json({
+                            "type": "notification",
+                            "message": f"⚠️ Rate limited. Wait {status.get('remaining_cooldown', 60)}s before scanning.",
+                            "level": "warning"
+                        })
+                        return
+                except ImportError:
+                    pass
+                
                 state._last_manual_scan_time = time.time()
                 # Enriched scan: TA → AI picks → enrich each pick with full data
                 await manager.broadcast({
@@ -324,7 +518,6 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     "level": "info"
                 })
 
-                import os
                 if os.getenv("SIMULATION", "false").lower() == "true":
                     await asyncio.sleep(1) # Delay for UI stabilization
                     mock_picks = [{
@@ -571,6 +764,9 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     state.ai_advisor_message = scan_entry
                     state.ai_scans_today.insert(0, scan_entry)
                     state.ai_scans_today = state.ai_scans_today[:50]
+                    
+                    # Update last successful data timestamp
+                    state.last_data_update = datetime.datetime.now().isoformat()
 
                     await manager.broadcast({
                         "type": "scan_results",
@@ -712,6 +908,19 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     })
 
             elif action == "get_chart_data":
+                # Check rate limit before fetching chart data
+                try:
+                    from services.upstox_service import is_rate_limited, get_rate_limit_status
+                    if is_rate_limited():
+                        status = get_rate_limit_status()
+                        await websocket.send_json({
+                            "type": "notification",
+                            "message": f"⏳ Rate limited. Using cached data. Retry in {status.get('remaining_cooldown', 60)}s.",
+                            "level": "warning"
+                        })
+                except ImportError:
+                    pass
+                
                 try:
                     from services.technical_analysis import TechnicalAnalysisService
                     from services.upstox_streamer import get_streamer
@@ -725,6 +934,19 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     payload = await asyncio.to_thread(
                         ta_svc.get_chart_payload, ticker, interval, params
                     )
+
+                    # Add rate limit info to chart payload
+                    try:
+                        from services.upstox_service import get_rate_limit_status
+                        rate_status = get_rate_limit_status()
+                        payload["rate_limit_status"] = rate_status
+                        payload["is_stale_data"] = rate_status.get("is_rate_limited", False)
+                    except ImportError:
+                        pass
+                    
+                    # Update last successful data timestamp
+                    import datetime
+                    state.last_data_update = datetime.datetime.now().isoformat()
 
                     await websocket.send_json({
                         "type": "chart_data",
@@ -749,6 +971,32 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                         "type": "chart_data",
                         "data": {"error": str(e)}
                     })
+
+            elif action == "refresh_data":
+                """Manual refresh with rate limit awareness."""
+                try:
+                    from services.upstox_service import is_rate_limited, get_rate_limit_status
+                    rate_status = get_rate_limit_status()
+                    
+                    if rate_status.get("is_rate_limited"):
+                        remaining = rate_status.get("remaining_cooldown", 60)
+                        await websocket.send_json({
+                            "type": "notification",
+                            "message": f"⚠️ Rate limited. Please wait {remaining}s before refreshing.",
+                            "level": "warning"
+                        })
+                        # Send current state anyway to show data
+                        await manager.send_state(websocket, state)
+                    else:
+                        # Proceed with refresh
+                        await manager.send_state(websocket, state)
+                        await websocket.send_json({
+                            "type": "notification",
+                            "message": "✅ Data refreshed successfully",
+                            "level": "success"
+                        })
+                except ImportError:
+                    await manager.send_state(websocket, state)
 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
