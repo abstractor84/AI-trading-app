@@ -88,6 +88,10 @@ class ConnectionManager:
             logger.debug("Skipping broadcast due to rate limiting")
             return
         
+        # SKEPTIC DEBUG: Log all broadcasts
+        if message.get("type") == "tick":
+            logger.info(f"BROADCAST: Broadcasting tick to {len(self.active_connections)} clients: {message.get('data', {}).get('ltp')}")
+        
         dead = []
         for conn in self.active_connections:
             try:
@@ -511,6 +515,35 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     pass
                 
                 state._last_manual_scan_time = time.time()
+                
+                # SKEPTIC: Time restriction - reject scans before 9:15 AM and after 3:00 PM
+                from datetime import datetime
+                now = datetime.now()
+                # Get current time in IST (UTC+5:30)
+                current_hour = now.hour
+                current_minute = now.minute
+                current_time_minutes = current_hour * 60 + current_minute
+                
+                # Market open time: 9:15 AM = 555 minutes
+                # Market close warning: 3:00 PM = 900 minutes
+                market_open_minutes = 9 * 60 + 15  # 555
+                market_close_minutes = 15 * 60  # 900
+                
+                if current_time_minutes < market_open_minutes:
+                    await websocket.send_json({
+                        "type": "notification",
+                        "message": "⏰ AI Scan rejected. Market opens at 9:15 AM IST. Please wait for market open.",
+                        "level": "warning"
+                    })
+                    return
+                elif current_time_minutes >= market_close_minutes:
+                    await websocket.send_json({
+                        "type": "notification",
+                        "message": "⏰ AI Scan rejected. Market closes at 3:30 PM IST. Scan time has passed for today.",
+                        "level": "warning"
+                    })
+                    return
+                
                 # Enriched scan: TA → AI picks → enrich each pick with full data
                 await manager.broadcast({
                     "type": "notification",
@@ -746,10 +779,10 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                                     "bb_lower": _s(ta_data.get("bb_lower", 0), 2),
                                     "ema_9": _s(ta_data.get("ema_9", 0), 2),
                                     "ema_21": _s(ta_data.get("ema_21", 0), 2),
-                                    "lz_score": _s(cached.get("math_prob", 0), 2),
+                                    "lz_score": _s(ta_data.get("math_prob", 0), 2),  # SKEPTIC FIX: was cached.get() which was wrong
                                 },
                                 "lorentzian": {
-                                    "score": _s(cached.get("math_prob", 0), 2),
+                                    "score": _s(ta_data.get("math_prob", 0), 2),  # SKEPTIC FIX: was cached.get() which was wrong
                                     "signal": final_signal
                                 },
                                 "risk_levels": risk_levels,
@@ -954,7 +987,13 @@ async def handle_websocket(websocket: WebSocket, manager: ConnectionManager, sta
                     })
 
                     inst_key = get_instrument_key(ticker)
+                    
+                    # Send instrument key to frontend for tick matching
                     if inst_key:
+                        await websocket.send_json({
+                            "type": "chart_instrument_key",
+                            "data": { "instrument_key": inst_key }
+                        })
                         # Tick callback broadcasts to all connected clients
                         async def tick_callback(tick):
                             await manager.broadcast({

@@ -12,11 +12,12 @@ class QuotaService:
         # Strict user limits: max 20/day per provider
         # yfinance limits: ~2000 requests/hour per IP, but we throttle to be safe
         # We use higher limits now with aggressive caching to prevent rate limits
+        # Based on research: Yahoo allows ~2000/hour, 10000-50000/day is safe
         self.defaults = {
             "google": {"rpm": 15, "tpm": 1000000, "rpd": 20},
             "groq": {"rpm": 30, "tpm": 144000, "rpd": 20},
             "sambanova": {"rpm": 15, "tpm": 50000, "rpd": 20},
-            "yfinance": {"rpm": 60, "tpm": 1000, "rpd": 1800},  # 60 req/min, 1800/day (Yahoo allows ~2000/hour)
+            "yfinance": {"rpm": 30, "tpm": 500, "rpd": 10000},  # 30 req/min (2/sec), 10000/day (safe per research)
         }
 
     def _get_usage(self, db: Session, model_name: str) -> ApiUsage:

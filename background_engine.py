@@ -207,6 +207,23 @@ class BackgroundEngine:
 
         try:
             if prompt_type == "SCAN":
+                # SKEPTIC: Time restriction - reject scans before 9:15 AM and after 3:00 PM
+                current_hour = now.hour
+                current_minute = now.minute
+                current_time_minutes = current_hour * 60 + current_minute
+                
+                # Market open time: 9:15 AM = 555 minutes
+                # Market close warning: 3:00 PM = 900 minutes
+                market_open_minutes = 9 * 60 + 15  # 555
+                market_close_minutes = 15 * 60  # 900
+                
+                if current_time_minutes < market_open_minutes:
+                    logger.info(f"Skipping AI SCAN: Market opens at 9:15 AM IST (current: {current_hour:02d}:{current_minute:02d})")
+                    return None
+                elif current_time_minutes >= market_close_minutes:
+                    logger.info(f"Skipping AI SCAN: Market closes at 3:30 PM IST (current: {current_hour:02d}:{current_minute:02d})")
+                    return None
+                
                 # Build candidate list with TA data
                 candidates = []
                 top_stocks = await asyncio.to_thread(

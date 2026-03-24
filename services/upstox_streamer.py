@@ -398,9 +398,15 @@ class UpstoxLiveStream:
         """Decode the raw binary protobuf message into a Python dict."""
         correlation_id = str(uuid.uuid4())
         
+        # SKEPTIC DEBUG: Log raw buffer content
+        logger.info(f"Decode attempt: buffer type={type(buffer)}, len={len(buffer) if buffer else 0}, first_bytes={buffer[:50] if buffer else 'None'}")
+        
         try:
             feed_response = pb.FeedResponse()
             feed_response.ParseFromString(buffer)
+            
+            # SKEPTIC DEBUG: Log parsed feeds
+            logger.info(f"Parsed FeedResponse: feeds count = {len(feed_response.feeds)}, feeds keys = {list(feed_response.feeds.keys())}")
             
             ticks = []
             for instrument_key, feed in feed_response.feeds.items():
@@ -506,13 +512,19 @@ class UpstoxLiveStream:
                         
                     while self.running:
                         try:
+                            logger.info("Waiting for WebSocket message...")
                             message = await websocket.recv()
+                            logger.info(f"Received raw message type: {type(message)}, length: {len(message) if message else 0}")
                             ticks = self._decode_protobuf(message)
                             if ticks:
                                 for tick in ticks:
+                                    # SKEPTIC DEBUG: Log before callback
+                                    logger.info(f"CALLBACK INVOKING: {tick}")
                                     await self.callback(tick)
                                     # Emit 'message' event
                                     self._emit('message', tick)
+                            else:
+                                logger.info("No ticks decoded from message")
                         except ConnectionClosed:
                             logger.warning("Upstox WS disconnected.")
                             # Emit 'close' event
@@ -639,7 +651,11 @@ upstox_streamer = None
 
 def get_streamer(callback=None):
     global upstox_streamer
+    import logging
+    streamer_log = logging.getLogger("streamer_init")
+    
     if upstox_streamer is None:
+        streamer_log.info(f"Creating NEW UpstoxLiveStream with callback")
         # Default callback if none provided
         if callback is None:
             async def default_cb(tick):
@@ -647,7 +663,9 @@ def get_streamer(callback=None):
             callback = default_cb
         upstox_streamer = UpstoxLiveStream(callback)
     elif callback:
+        streamer_log.info(f"Updating existing streamer's callback")
         # Update callback if a new one is provided (e.g. from new ws manager)
         upstox_streamer.set_callback(callback)
-        
+    
+    streamer_log.info(f"get_streamer returning with callback: {callback is not None}")
     return upstox_streamer

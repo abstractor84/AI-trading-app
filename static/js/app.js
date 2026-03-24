@@ -9,7 +9,7 @@ const appState = {
     openTrades: [], closedTrades: [], globalContext: {}, marketPhase: {},
     aiAdvisor: null, aiScansToday: [], actionTimeline: [], aiCallsToday: 0, aiCallsLimit: 7,
     chartInstance: null, adxChart: null, currentChartData: null,
-    currentChartKey: null, currentInterval: '5m',
+    currentChartKey: null, currentChartInstrumentKey: null, currentInterval: '5m',
     // Rate limit tracking
     isRateLimited: false,
     rateLimitCooldown: 0,
@@ -1417,7 +1417,7 @@ function handleAIAdvisorUpdate(data) {
                         <div class="ta-chip" title="MACD Convergence"><span class="ta-label">MACD</span><span class="ta-value">${ta.macd_hist || '--'}</span></div>
                         <div class="ta-chip" title="ADX Trend Strength"><span class="ta-label">ADX</span><span class="ta-value">${ta.adx_14 || '--'}</span></div>
                         <div class="ta-chip" title="Volume Relative to 20-day Avg"><span class="ta-label">VOL</span><span class="ta-value">${ta.vol_surge || 1}x</span></div>
-                        <div class="ta-chip" title="Lorentzian AI Score"><span class="ta-label">LZ AI</span><span class="ta-value">${ta.lz_score || '--'}</span></div>
+                        <div class="ta-chip" title="Lorentzian AI Score"><span class="ta-label">LZ AI</span><span class="ta-value">${(r.lorentzian && r.lorentzian.score) || (r.ml_lorentzian && r.ml_lorentzian.length > 0 ? r.ml_lorentzian[r.ml_lorentzian.length-1].score : '--') || '--'}</span></div>
                     </div>
 
                     <div class="sc-levels-row">
@@ -1638,14 +1638,17 @@ function showAlert(title, message) {
 function handleLiveTick(tick) {
     if (!tick) return;
     
-    // SKEPTIC: Map Upstox 'key' to our internal ticker representation
+    // SKEPTIC FIX: Match by instrument key directly for chart updates
     const tickKey = tick.key || tick.symbol || "";
-    const cleanKey = tickKey.replace("NSE_EQ|", "").replace("NSE_INDEX|", "");
-    const tickerWithNS = cleanKey.endsWith(".NS") ? cleanKey : (cleanKey + ".NS");
     
     // 1. Update matching open trades
+    // Try to match by instrument key or ticker
     appState.openTrades.forEach(t => {
-        if (t.ticker === tickerWithNS || t.ticker === cleanKey) {
+        // Check if ticker matches the tick key (after removing prefix)
+        const cleanKey = tickKey.replace("NSE_EQ|", "").replace("NSE_INDEX|", "");
+        const tickerWithNS = cleanKey.endsWith(".NS") ? cleanKey : (cleanKey + ".NS");
+        
+        if (t.ticker === tickerWithNS || t.ticker === cleanKey || tickKey.includes(t.ticker.replace(".NS", ""))) {
             t.current_price = tick.ltp;
             // Recalculate P&L
             if (t.action === 'BUY') {
@@ -1661,8 +1664,9 @@ function handleLiveTick(tick) {
     updateDaySummary();
     renderTradeHistory();
 
-    // 3. Update active chart with live real-time ticks (SKEPTIC: Extend current candle, don't create new ones)
-    if (appState.currentChartKey === tickerWithNS || appState.currentChartKey === cleanKey) {
+    // 3. Update active chart with live real-time ticks (Match by instrument key)
+    // Use instrument key for precise matching
+    if (appState.currentChartInstrumentKey && tickKey === appState.currentChartInstrumentKey) {
         if (appState.series.candles && appState.currentChartData && appState.currentChartData.length > 0) {
             // Get the last candle (current period)
             const candles = appState.currentChartData;
@@ -1674,8 +1678,12 @@ function handleLiveTick(tick) {
             // If tick is in the same candle period, extend it; otherwise create new candle
             const candleTime = lastCandle.time;
             
+            // SKEPTIC FIX: Use dynamic interval instead of hardcoded 300 (5m)
+            const intervalMap = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 };
+            const intervalSeconds = intervalMap[appState.currentInterval] || 300;
+            
             // Check if tick is for the current candle (same time window)
-            const isSameCandle = tickTimeSec >= candleTime && tickTimeSec < candleTime + 300; // 5-min candles
+            const isSameCandle = tickTimeSec >= candleTime && tickTimeSec < candleTime + intervalSeconds;
             
             if (isSameCandle) {
                 // Extend existing candle
@@ -1742,6 +1750,13 @@ ws.onmessage = (event) => {
                 break;
             case "chart_data":
                 renderChart(msg.data);
+                break;
+            case "chart_instrument_key":
+                // Store the instrument key for tick matching
+                if (msg.data && msg.data.instrument_key) {
+                    appState.currentChartInstrumentKey = msg.data.instrument_key;
+                    console.log("Chart instrument key set:", msg.data.instrument_key);
+                }
                 break;
             case "tick":
                 handleLiveTick(msg.data);
