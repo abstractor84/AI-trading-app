@@ -41,7 +41,9 @@ class MarketPhaseService:
 
     def get_current_phase(self) -> MarketPhase:
         """Determine the current market phase from IST clock."""
-        now = datetime.now().time()
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist).time()
         for start, end, phase in _PHASE_SCHEDULE:
             if start <= now < end:
                 return phase
@@ -92,8 +94,23 @@ class MarketPhaseService:
 
     def get_ai_schedule(self) -> dict:
         """Return AI call schedule for the current phase."""
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        current_time = now.time()
+        
+        # AI scan is only allowed between 9:15 AM and 3:00 PM IST
+        market_open = dtime(9, 15)
+        market_close = dtime(15, 0)  # 3:00 PM
+        
+        # If outside trading hours, no AI scans
+        if current_time < market_open or current_time >= market_close:
+            logger.info(f"AI scan rejected: outside trading hours ({current_time.strftime('%H:%M')} IST)")
+            return {"call_interval_mins": 0, "prompt_type": None, "description": "AI scans only allowed 9:15 AM - 3:00 PM IST"}
+        
         phase = self.get_current_phase()
-        return _AI_SCHEDULE.get(phase, {"call_interval_mins": 0, "prompt_type": None})
+        schedule = _AI_SCHEDULE.get(phase, {"call_interval_mins": 0, "prompt_type": None})
+        return schedule
 
 
 # Human-readable labels

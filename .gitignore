@@ -12,3 +12,9 @@ search_*.py
 find_*.py
 test_stderr.txt
 deep_search_upstox.py
+temp_files/
+gemini_backup/
+*.swp
+*.swo
+NSE_instruments.json
+.coverage

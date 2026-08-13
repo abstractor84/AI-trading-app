@@ -56,7 +56,10 @@ async def lifespan(app: FastAPI):
     
     # Start Upstox Live Streamer
     from services.upstox_streamer import get_streamer
+    import logging
+    streamer_logger = logging.getLogger("streamer_broadcast")
     async def global_tick_handler(tick):
+        streamer_logger.info(f"Broadcasting tick: {tick}")
         await manager.broadcast({
             "type": "tick",
             "data": tick

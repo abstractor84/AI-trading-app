@@ -69,11 +69,10 @@ CACHE_TTL_POSITIONS = 60 * 60 # 1 hour for positions/holdings data
 # If cache is older than this when rate limited, return None instead of stale data
 MAX_CACHE_AGE_RATE_LIMIT = 300  # 5 minutes
 
-# Rate limiting
-# SKEPTIC: Increased from 2 to 30 requests per minute to match yfinance's ~2000/hour limit
-# This allows faster data fetching while still respecting rate limits
-MAX_REQUESTS_PER_MINUTE = 30
-REQUEST_COOLDOWN = 2  # seconds between requests (reduced from 30 for faster fetching)
+# Rate limiting - Conservative to avoid 429 errors
+# Yahoo: ~2000/hour, 2-5/sec safe range
+MAX_REQUESTS_PER_MINUTE = 5  # Reduced from 30 to be safer
+REQUEST_COOLDOWN = 1  # 1 second between requests
 
 # Cache size limits to prevent unbounded growth
 MAX_CACHE_SIZE = 200

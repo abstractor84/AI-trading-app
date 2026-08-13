@@ -60,8 +60,10 @@ def test_fetch_intraday_candles_success():
         svc = UpstoxService()
         # [Timestamp, Open, High, Low, Close, Volume, OI]
         candles = [["2024-01-01T09:15:00+05:30", 100, 101, 99, 100.5, 1000, 0]]
-        # Upstox V3 endpoint
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/KEY/minutes/5",
+        # Upstox V3 endpoint - use V3_URL for intraday
+        import re
+        url_re = re.compile(rf"{svc.V3_URL}/historical-candle/intraday/KEY/minutes/5")
+        responses.add(responses.GET, url_re,
                       json={"data": {"candles": candles}}, status=200)
 
         df = svc.fetch_intraday_candles("KEY", interval="5", unit="minutes")
@@ -75,8 +77,8 @@ def test_fetch_historical_candles_success():
         svc = UpstoxService()
         candles = [["2024-01-01T09:15:00+05:30", 100, 101, 99, 100.5, 1000, 0]]
         import re
-        # Match URL with any date suffix
-        url_re = re.compile(rf"{svc.BASE_URL}/historical-candle/KEY/minutes/5/.*")
+        # Match URL with any date suffix - use V3_URL for historical
+        url_re = re.compile(rf"{svc.V3_URL}/historical-candle/KEY/minutes/5/.*")
         responses.add(responses.GET, url_re, json={"data": {"candles": candles}}, status=200)
         
         df = svc.fetch_historical_candles("KEY", unit="minutes", interval="5", days=5)
@@ -87,7 +89,9 @@ def test_fetch_historical_candles_success():
 def test_fetch_intraday_candles_unauthorized():
     with patch("os.getenv", return_value="expired_token"):
         svc = UpstoxService()
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/KEY/minutes/5", status=401)
+        import re
+        url_re = re.compile(rf"{svc.V3_URL}/historical-candle/intraday/KEY/minutes/5")
+        responses.add(responses.GET, url_re, status=401)
         res = svc.fetch_intraday_candles("KEY", interval="5", unit="minutes")
         assert res is None
 
@@ -131,9 +135,11 @@ def test_fetch_ohlcv_merge(mock_key, mock_hist, mock_intra):
 def test_upstox_errors_and_exceptions():
     with patch("os.getenv", return_value="token"):
         svc = UpstoxService()
+        import re
         
-        # 1. Rate limit (429)
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/minutes/5", status=429)
+        # 1. Rate limit (429) - use V3_URL for intraday
+        url_re = re.compile(rf"{svc.V3_URL}/historical-candle/intraday/K/minutes/5")
+        responses.add(responses.GET, url_re, status=429)
         assert svc.fetch_intraday_candles("K", interval="5") is None
         
         # 2. Validation exception
@@ -159,24 +165,25 @@ def test_candles_to_df_tz_localize():
 def test_upstox_http_errors():
     with patch("os.getenv", return_value="token"):
         svc = UpstoxService()
+        import re
         
-        # Intraday 429 and 500
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/minutes/5", status=429)
+        # Intraday 429 and 500 - use V3_URL
+        intraday_re = re.compile(rf"{svc.V3_URL}/historical-candle/intraday/K/minutes/5")
+        responses.add(responses.GET, intraday_re, status=429)
         svc.fetch_intraday_candles("K", interval="5")
         
-        responses.add(responses.GET, f"{svc.BASE_URL}/historical-candle/intraday/K/minutes/5", status=500)
+        responses.add(responses.GET, intraday_re, status=500)
         svc.fetch_intraday_candles("K", interval="5")
 
-        # Historical 401, 429, 500
-        import re
-        url_re = re.compile(rf"{svc.BASE_URL}/historical-candle/K/minutes/5/.*")
-        responses.add(responses.GET, url_re, status=401)
+        # Historical 401, 429, 500 - use V3_URL
+        hist_re = re.compile(rf"{svc.V3_URL}/historical-candle/K/minutes/5/.*")
+        responses.add(responses.GET, hist_re, status=401)
         svc.fetch_historical_candles("K", interval="5")
         
-        responses.add(responses.GET, url_re, status=429)
+        responses.add(responses.GET, hist_re, status=429)
         svc.fetch_historical_candles("K", interval="5")
         
-        responses.add(responses.GET, url_re, status=500)
+        responses.add(responses.GET, hist_re, status=500)
         svc.fetch_historical_candles("K", interval="5")
 
 def test_fetch_market_quote_exception():

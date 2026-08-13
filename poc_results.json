@@ -1,0 +1,150 @@
+{
+  "market_quote_results": {
+    "Nifty 50": {
+      "instrument_key_sent": "NSE_INDEX|Nifty 50",
+      "instrument_key_found": "NSE_INDEX|Nifty 50",
+      "value": 22951.4,
+      "change": 438.75,
+      "change_pct": 1.91,
+      "success": true
+    },
+    "Nifty Bank": {
+      "instrument_key_sent": "NSE_INDEX|Nifty Bank",
+      "instrument_key_found": "NSE_INDEX|Nifty Bank",
+      "value": 52682.25,
+      "change": 1244.5,
+      "change_pct": 2.36,
+      "success": true
+    },
+    "India VIX": {
+      "instrument_key_sent": "NSE_INDEX|India VIX",
+      "instrument_key_found": "NSE_INDEX|India VIX",
+      "value": 25.21,
+      "change": -1.52,
+      "change_pct": -6.03,
+      "success": true
+    },
+    "Sensex (SENSEX caps)": {
+      "instrument_key_sent": "BSE_INDEX|SENSEX",
+      "instrument_key_found": "BSE_INDEX|SENSEX",
+      "value": 74131.76,
+      "change": 1435.37,
+      "change_pct": 1.94,
+      "success": true
+    },
+    "Sensex (Sensex mixed)": {
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    "GIFT Nifty": {
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    "FinNifty": {
+      "instrument_key_sent": "NSE_INDEX|Nifty Fin Service",
+      "instrument_key_found": "NSE_INDEX|Nifty Fin Service",
+      "value": 24502.7,
+      "change": 543.5,
+      "change_pct": 2.22,
+      "success": true
+    },
+    "Nifty Midcap 100": {
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    },
+    "Nifty Smallcap 100": {
+      "success": false,
+      "error": "'NoneType' object has no attribute 'get'"
+    }
+  },
+  "instrument_search_results": {
+    "Nifty 50": {
+      "instrument_key": "NSE_INDEX|Nifty FinSrv25 50",
+      "name": "Nifty FinSrv25 50",
+      "trading_symbol": "NIFTY FINSRV25 50",
+      "segment": "NSE_INDEX",
+      "exchange": "NSE"
+    },
+    "Nifty Bank": {
+      "instrument_key": "NSE_INDEX|Nifty PSU Bank",
+      "name": "Nifty PSU Bank",
+      "trading_symbol": "NIFTY PSU BANK",
+      "segment": "NSE_INDEX",
+      "exchange": "NSE"
+    },
+    "Sensex": {
+      "instrument_key": "BSE_INDEX|SNXN30",
+      "name": "BSE SENSEX NEXT 30",
+      "trading_symbol": "SNXN30",
+      "segment": "BSE_INDEX",
+      "exchange": "BSE"
+    },
+    "India VIX": {
+      "instrument_key": "BSE_INDEX|INFRA",
+      "name": "BSE INDIA INFRA INDEX",
+      "trading_symbol": "INFRA",
+      "segment": "BSE_INDEX",
+      "exchange": "BSE"
+    },
+    "GIFT Nifty": {
+      "instrument_key": "NSE_INDEX|Nifty Fin Service",
+      "name": "Nifty Fin Service",
+      "trading_symbol": "FINNIFTY",
+      "segment": "NSE_INDEX",
+      "exchange": "NSE"
+    },
+    "FinNifty": {
+      "instrument_key": "NSE_INDEX|Nifty Fin Service",
+      "name": "Nifty Fin Service",
+      "trading_symbol": "FINNIFTY",
+      "segment": "NSE_INDEX",
+      "exchange": "NSE"
+    },
+    "Nifty Midcap": {
+      "instrument_key": "NSE_INDEX|Nifty Midcap 50",
+      "name": "Nifty Midcap 50",
+      "trading_symbol": "NIFTY MIDCAP 50",
+      "segment": "NSE_INDEX",
+      "exchange": "NSE"
+    },
+    "Nifty Smallcap": {
+      "instrument_key": "NSE_INDEX|NIFTY SMLCAP 100",
+      "name": "NIFTY SMLCAP 100",
+      "trading_symbol": "NIFTY SMLCAP 100",
+      "segment": "NSE_INDEX",
+      "exchange": "NSE"
+    }
+  },
+  "yfinance_results": {
+    "^NIFTYMIDCAP100": {
+      "name": "Nifty Midcap 100",
+      "success": false,
+      "error": "Empty data"
+    },
+    "NIFTYMIDCAP.NS": {
+      "name": "Nifty Midcap 100",
+      "success": false,
+      "error": "Empty data"
+    },
+    "^NIFTYMIDCAP": {
+      "name": "Nifty Midcap 100",
+      "success": false,
+      "error": "Empty data"
+    },
+    "^NIFTYSMALLCAP100": {
+      "name": "Nifty Smallcap 100",
+      "success": false,
+      "error": "Empty data"
+    },
+    "NIFTYSMALLCAP.NS": {
+      "name": "Nifty Smallcap 100",
+      "success": false,
+      "error": "Empty data"
+    },
+    "^NIFTYSMALLCAP": {
+      "name": "Nifty Smallcap 100",
+      "success": false,
+      "error": "Empty data"
+    }
+  }
+}

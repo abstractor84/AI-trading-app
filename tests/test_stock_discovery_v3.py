@@ -13,10 +13,10 @@ def test_fetch_global_indices_structure():
     
     india = data["india"]
     assert "GIFT Nifty" in india
-    assert "NIFTY 50" in india
-    assert "BANK NIFTY" in india
-    assert "NIFTY PHARMA" in india
-    assert "NIFTY MIDCAP 100" in india
+    assert "Nifty 50" in india
+    assert "Bank Nifty" in india
+    assert "Nifty Midcap 100" in india
+    assert "Nifty Smallcap 100" in india
     
     glob = data["global"]
     assert "USD/INR" in glob
